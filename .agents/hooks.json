@@ -1,0 +1,12 @@
+{
+  "hooks": [
+    {
+      "event": "Stop",
+      "command": "\"D:\\Download\\AI agent auto switch\\focusmgr.exe\" save-and-focus --agent antigravity --session %conversationId%"
+    },
+    {
+      "event": "PreInvocation",
+      "command": "\"D:\\Download\\AI agent auto switch\\focusmgr.exe\" restore --agent antigravity --session %conversationId%"
+    }
+  ]
+}

@@ -1,0 +1,379 @@
+Product Requirements Document: Auto-Focus Window Manager for AI Agents
+
+1. Problem Statement
+
+Developers using AI coding agents (Claude Code, Antigravity, Codex) lose productivity due to context-switching friction. When an agent finishes a task, users either:
+
+· Miss the completion notification entirely, wasting time on unrelated activities 
+· Manually navigate back to the agent's terminal/window, disrupting their flow
+· Must remember to return to the agent rather than continuing their work
+
+Conversely, when users return to the agent to give a new command, there is no automatic mechanism to resume their previous work context. The user must manually find and switch back to whatever they were doing.
+
+Core insight: The ideal workflow is a "focus loop" where the AI agent's window automatically captures focus when it needs attention, and the user's previous working context automatically restores when they engage the agent.
+
+2. Solution Overview
+
+A Windows desktop application that listens to AI agent lifecycle hooks and automatically manages window focus:
+
+1. On task completion (Stop event): Save the user's current active window, then switch focus to the agent's window
+2. On user prompt submission (UserPromptSubmit event): Restore focus to the previously saved window
+
+This creates a seamless "parallel working" experience where the user can focus on other tasks while the agent runs, then resume exactly where they left off.
+
+3. Target Platforms & Agent Compatibility
+
+The tool must support the following AI agents with these specific capabilities:
+
+Agent Stop Hook UserPromptSubmit Hook Notes
+Claude Code ✅ Yes ✅ Yes Fully supported 
+Codex (CLI/App) ✅ Yes ✅ Yes Claude-compatible hooks 
+Antigravity ✅ Yes (Stop) ⚠️ Limited (PreInvocation only) See Section 4.3 for caveats 
+
+4. Functional Requirements
+
+4.1 Core Focus Loop
+
+FR-1: Window State Capture
+
+· When the Stop hook fires, the system must capture and persist the identifier of the currently active window (the window the user is working in).
+· The window identifier should be the Windows HWND (window handle) for reliable targeting.
+
+FR-2: Agent Window Activation
+
+· After capturing the previous window, the system must switch focus to the agent's terminal or IDE window.
+· The agent window must be determined dynamically (not hardcoded), supporting multiple concurrent agent sessions.
+
+FR-3: Previous Window Restoration
+
+· When the UserPromptSubmit hook fires (user gives new command), the system must restore focus to the window captured in FR-1.
+· If the saved window no longer exists, the system must fail gracefully without error.
+
+FR-4: Multi-Agent Session Support
+
+· The system must maintain a per-session mapping of (agent session → saved window handle).
+· Concurrent Claude Code, Codex, and Antigravity sessions must not interfere with each other's window state.
+
+4.2 Hook Integration
+
+FR-5: Claude Code Hook Configuration
+
+· The installer must write or merge hooks into the appropriate settings files:
+  · Stop hook → trigger window save + agent focus
+  · UserPromptSubmit hook → trigger previous window restore
+· Hook commands should be lightweight (sub-100ms) to avoid stalling the agent session .
+
+FR-6: Codex Hook Configuration
+
+· Codex hooks use the same event names (Stop, UserPromptSubmit) and accept Claude-compatible JSON shapes .
+· Configuration should be written to Codex's hook configuration location.
+
+FR-7: Antigravity Hook Configuration
+
+· Antigravity hooks are configured via hooks.json .
+· Limitation: Antigravity does not expose a direct UserPromptSubmit event. The closest available is PreInvocation (fires before model invocation, not specifically before user prompt).
+· Mitigation: Use PreInvocation as the restore trigger, accepting that it may fire in contexts other than user prompt submission.
+
+4.3 Window Management (Windows-Specific)
+
+FR-8: Window Activation via Win32 API
+
+· The system must use SetForegroundWindow or equivalent to activate windows.
+· Must handle Windows focus-stealing prevention (may require AllowSetForegroundWindow or a brief foreground lock manipulation).
+
+FR-9: Window Handle Validation
+
+· Before restoring, the system must verify the saved HWND still exists and is valid.
+· Invalid handles should be silently ignored (no error dialogs).
+
+FR-10: Fallback Behavior
+
+· If window restoration fails, the system must log the failure but not block the agent session.
+· The hook must exit cleanly (exit code 0) even on failure.
+
+5. Non-Functional Requirements
+
+NFR-1: Performance
+
+· Hook execution must complete within 50ms to avoid noticeable agent stalling.
+· Window save/restore operations must be atomic (no partial state).
+
+NFR-2: Reliability
+
+· The tool must survive agent restarts and system reboots.
+· State persistence: saved window handles should survive across sessions.
+
+NFR-3: Minimal Footprint
+
+· No persistent background service required (hooks are invoked by the agent).
+· Binary size < 5MB (Go or Rust recommended).
+
+NFR-4: Configuration Simplicity
+
+· Installation should be a single command: download binary + run install command.
+· The installer must auto-detect installed agents and configure hooks accordingly.
+
+6. Technical Architecture
+
+6.1 Component Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Windows Desktop                          │
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │ Claude Code  │    │   Codex CLI  │    │  Antigravity │  │
+│  │   Session    │    │   Session    │    │   Session    │  │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘  │
+│         │                   │                   │          │
+│         │ Hook: Stop         │ Hook: Stop        │ Hook: Stop│
+│         │ Hook: UserPrompt   │ Hook: UserPrompt  │ Hook: Pre │
+│         ▼                   ▼                   ▼          │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │           Focus Manager (CLI Binary)                   ││
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    ││
+│  │  │ State Store │  │ Window API  │  │ Log Manager │    ││
+│  │  │ (JSON file) │  │ (Win32)     │  │             │    ││
+│  │  └─────────────┘  └─────────────┘  └─────────────┘    ││
+│  └─────────────────────────────────────────────────────────┘│
+│                            │                                │
+│                            ▼                                │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │           User's Active Window                          ││
+│  │  (Browser, Editor, Slack, etc.)                        ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+6.2 Data Flow
+
+On Stop event:
+
+1. Hook invokes focusmgr save-and-focus --session <session_id>
+2. save-and-focus captures current foreground window HWND
+3. Stores mapping: session_id → hwnd in JSON state file
+4. Determines agent window HWND (via session ID or configurable process matching)
+5. Activates agent window via SetForegroundWindow
+6. Exits 0
+
+On UserPromptSubmit event:
+
+1. Hook invokes focusmgr restore --session <session_id>
+2. restore loads state file, looks up saved HWND for session
+3. Validates HWND still exists
+4. Activates saved window via SetForegroundWindow
+5. Exits 0
+
+6.3 State File Schema
+
+```json
+{
+  "sessions": {
+    "claude-code-abc123": {
+      "saved_hwnd": 123456,
+      "saved_at": "2026-01-15T10:30:00Z",
+      "agent_type": "claude-code"
+    },
+    "codex-def456": {
+      "saved_hwnd": 789012,
+      "saved_at": "2026-01-15T10:32:00Z",
+      "agent_type": "codex"
+    }
+  }
+}
+```
+
+Location: %APPDATA%\focusmgr\state.json
+
+7. Hook Configuration Details
+
+7.1 Claude Code
+
+Hooks are configured in ~/.claude/settings.json:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "focusmgr save-and-focus --session $CLAUDE_SESSION_ID"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "focusmgr restore --session $CLAUDE_SESSION_ID"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Notes:
+
+· UserPromptSubmit has a 30-second default timeout; our hook must complete quickly .
+· The hook receives JSON on stdin including session_id, but using the environment variable is simpler .
+· Claude Code watches settings files and picks up changes automatically .
+
+7.2 Codex
+
+Codex hooks accept the same event names and JSON shapes as Claude Code . Configuration location may differ (e.g., ~/.codex/config.toml or equivalent hooks file).
+
+Caveat: Codex may require hook trust approval before executing commands .
+
+7.3 Antigravity
+
+Antigravity hooks are configured in a hooks.json file . The configuration uses an array format:
+
+```json
+{
+  "hooks": [
+    {
+      "event": "Stop",
+      "command": "focusmgr save-and-focus --session %conversationId%"
+    },
+    {
+      "event": "PreInvocation",
+      "command": "focusmgr restore --session %conversationId%"
+    }
+  ]
+}
+```
+
+Important caveats:
+
+· Antigravity reads hooks.json only at startup; changes require session restart .
+· Antigravity has no direct UserPromptSubmit equivalent. PreInvocation fires before model calls, which may include contexts beyond user prompts.
+· Hook input includes conversationId in the JSON stdin payload .
+
+8. Implementation Approach
+
+8.1 Technology Stack
+
+Component Recommendation Rationale
+Language Go or Rust Single binary, fast startup (<50ms), good Win32 interop
+Window API golang.org/x/sys/windows or windows-rs Native SetForegroundWindow, GetForegroundWindow
+State Store JSON file Simple, human-readable, no database dependency
+CLI Framework cobra (Go) or clap (Rust) Standard, well-documented
+
+8.2 Key Implementation Notes
+
+Saving Window Handle (Go example):
+
+```go
+func getForegroundWindow() (windows.HWND, error) {
+    hwnd, _, _ := procGetForegroundWindow.Call()
+    if hwnd == 0 {
+        return 0, fmt.Errorf("no foreground window")
+    }
+    return windows.HWND(hwnd), nil
+}
+```
+
+Restoring Window Handle:
+
+```go
+func activateWindow(hwnd windows.HWND) error {
+    // Check window still exists
+    if !isWindow(hwnd) {
+        return fmt.Errorf("window no longer exists")
+    }
+    // Attempt activation
+    ret, _, _ := procSetForegroundWindow.Call(uintptr(hwnd))
+    if ret == 0 {
+        return fmt.Errorf("SetForegroundWindow failed")
+    }
+    return nil
+}
+```
+
+Focus Stealing Prevention: Windows may prevent background processes from stealing focus. Mitigations:
+
+· Use AttachThreadInput to attach to the target thread
+· Or use AllowSetForegroundWindow(ASFW_ANY) before calling SetForegroundWindow
+· Or simulate Alt key press before activation (common workaround)
+
+8.3 Determining Agent Window HWND
+
+The agent window may not be the same as the terminal running the hook. Approaches:
+
+1. Configuration-based: User configures the agent window title pattern (e.g., "Claude Code", "Codex")
+2. Session-based: For tmux/terminal multiplexers, use session ID to find the pane's terminal window
+3. Fallback: Activate the terminal that launched the agent (parent process detection)
+
+Simplest viable approach: Let the user configure a window title substring for each agent type in a config file:
+
+```toml
+[agents.claude-code]
+window_title_match = "Claude"
+
+[agents.codex]
+window_title_match = "Codex"
+
+[agents.antigravity]
+window_title_match = "Antigravity"
+```
+
+9. Success Metrics
+
+Metric Target
+Hook execution time < 50ms
+Window restore success rate 95%
+User-reported context-switching time reduction 50%
+Installation time < 2 minutes
+
+10. Risks & Mitigations
+
+Risk Impact Mitigation
+Windows focus-stealing prevention blocks activation High Implement AttachThreadInput fallback; test on Win10/Win11
+Antigravity lacks UserPromptSubmit equivalent Medium Document limitation; use PreInvocation with caveats
+Hook stalls agent session High Keep execution <50ms; use async hooks where available 
+Concurrent agent sessions interfere Medium Per-session state mapping (FR-4)
+Hook trust requirements (Codex) Medium Document setup steps; provide installer script
+
+11. MVP Scope
+
+Phase 1 (MVP):
+
+· Single Claude Code session support
+· Stop → save + focus agent
+· UserPromptSubmit → restore previous window
+· Windows-only
+· Config file for agent window matching
+
+Phase 2:
+
+· Multi-session support
+· Codex support
+· Antigravity support (with PreInvocation)
+
+Phase 3:
+
+· Interactive overlay (choose whether to focus)
+· Audio ducking (like back2vibing) 
+· SSH/remote support
+
+12. Open Questions for Agent
+
+1. Language choice: Go or Rust? Consider binary size, startup time, and Windows API availability.
+2. Agent window detection: Should we require user configuration, or attempt auto-detection via process tree?
+3. State persistence: JSON file vs. Windows Registry vs. in-memory only (per-session)?
+4. Antigravity PreInvocation: Is PreInvocation acceptable as a restore trigger, given it may fire in non-user-prompt contexts?
+5. Error handling: Should failures be silent (exit 0) or logged to a file for debugging?
+
+---
+
+Document Version: 1.0
+Target Platform: Windows 10/11
+Primary Agents: Claude Code, Codex, Antigravity

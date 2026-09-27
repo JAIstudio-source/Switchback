@@ -1,0 +1,11 @@
+# Binaries
+focusmgr.exe
+*.exe
+
+# Go build artifacts
+*.o
+*.a
+
+# Local state and logs (if placed locally)
+*.log
+*.tmp.*
