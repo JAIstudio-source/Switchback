@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>focusmgr // Minecraft Pixel UI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="pixel-theme">
+  <!-- Audio Controls overlay -->
+  <div class="sound-toggle-bar">
+    <button id="btn-sound-toggle" class="mc-btn mc-btn-small" title="Toggle retro 8-bit sounds">
+      <span id="sound-icon">🔊</span> AUDIO: <span id="sound-status">ON</span>
+    </button>
+  </div>
+
+  <div class="game-container">
+    <!-- Header banner -->
+    <header class="mc-header">
+      <div class="title-container">
+        <div class="pixel-icon sword-icon"></div>
+        <div class="title-text-group">
+          <h1 class="mc-title">FOCUSMGR</h1>
+          <div class="mc-subtitle">AUTO-FOCUS WINDOW MANAGER FOR AI AGENTS</div>
+        </div>
+        <div class="pixel-icon pearl-icon"></div>
+      </div>
+
+      <!-- Player HUD -->
+      <div class="player-hud">
+        <div class="hud-row">
+          <div class="hearts-container" id="hearts-bar" title="Active Agents Health">
+            <!-- 10 pixel hearts rendered by JS -->
+          </div>
+          <div class="xp-level-badge" id="xp-level" title="Focus Switch Level">LVL 1</div>
+          <div class="hunger-container" id="hunger-bar" title="Focus Manager Stamina">
+            <!-- 10 pixel drumsticks rendered by JS -->
+          </div>
+        </div>
+        <div class="xp-bar-container" title="System Experience / Hook Activity">
+          <div class="xp-bar-fill" id="xp-fill"></div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="dashboard-grid">
+      <!-- Card 1: Active Window Radar (Compass) -->
+      <section class="mc-card stone-card" id="radar-section">
+        <div class="card-header">
+          <span class="header-icon">🧭</span>
+          <h2>WINDOW RADAR</h2>
+          <span class="radar-ping" id="radar-indicator">LIVE</span>
+        </div>
+        <div class="card-body">
+          <div class="radar-box">
+            <div class="stat-row">
+              <span class="stat-label">CURRENT TARGET:</span>
+              <span class="stat-value highlight-gold" id="current-window-title">Detecting...</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">HWND HANDLE:</span>
+              <span class="stat-value highlight-cyan" id="current-window-hwnd">0</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">ACTIVE SESSIONS:</span>
+              <span class="stat-value highlight-emerald" id="active-sessions-count">0</span>
+            </div>
+          </div>
+          <div class="button-group">
+            <button id="btn-refresh-radar" class="mc-btn mc-btn-green">
+              <span>🔄 SCAN WINDOWS</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 2: Ender Pearl Teleporter (Test & Manual Controls) -->
+      <section class="mc-card obsidian-card" id="teleport-section">
+        <div class="card-header">
+          <span class="header-icon">🔮</span>
+          <h2>ENDER TELEPORTER</h2>
+          <span class="badge-ender">SUB-50MS</span>
+        </div>
+        <div class="card-body">
+          <p class="teleport-desc">
+            Test the instant focus loop or manually trigger window transitions.
+          </p>
+          <div class="teleport-actions">
+            <button id="btn-test-teleport" class="mc-btn mc-btn-diamond pulse-btn">
+              <span>✨ TEST FOCUS SWITCH (3s)</span>
+            </button>
+            <div class="dual-buttons">
+              <button id="btn-manual-save" class="mc-btn mc-btn-wood">
+                <span>📥 SAVE & FOCUS</span>
+              </button>
+              <button id="btn-manual-restore" class="mc-btn mc-btn-wood">
+                <span>📤 RESTORE USER</span>
+              </button>
+            </div>
+          </div>
+          <!-- Countdown Overlay Modal (Hidden by default) -->
+          <div id="countdown-banner" class="countdown-banner hidden">
+            <div class="countdown-text" id="countdown-text">WARPING IN 3...</div>
+            <div class="countdown-subtext" id="countdown-subtext">Click on any other window now!</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 3: Redstone Hooks (Agent Integrations) -->
+      <section class="mc-card wood-card" id="hooks-section">
+        <div class="card-header">
+          <span class="header-icon">🔴</span>
+          <h2>REDSTONE HOOKS</h2>
+          <span class="badge-redstone" id="hooks-status-badge">READY</span>
+        </div>
+        <div class="card-body">
+          <div class="agent-list">
+            <!-- Claude Code -->
+            <div class="agent-item">
+              <div class="agent-info">
+                <span class="dust-dot active" id="dot-claude"></span>
+                <span class="agent-name">Claude Code</span>
+                <span class="agent-hook-info">Stop + UserPromptSubmit</span>
+              </div>
+              <span class="hook-badge active">COMPATIBLE</span>
+            </div>
+
+            <!-- Antigravity -->
+            <div class="agent-item">
+              <div class="agent-info">
+                <span class="dust-dot active" id="dot-antigravity"></span>
+                <span class="agent-name">Antigravity</span>
+                <span class="agent-hook-info">Stop + PreInvocation</span>
+              </div>
+              <span class="hook-badge active">INSTALLED</span>
+            </div>
+
+            <!-- Codex -->
+            <div class="agent-item">
+              <div class="agent-info">
+                <span class="dust-dot" id="dot-codex"></span>
+                <span class="agent-name">OpenAI Codex</span>
+                <span class="agent-hook-info">Claude Hook Specs</span>
+              </div>
+              <span class="hook-badge">READY</span>
+            </div>
+          </div>
+
+          <div class="button-group">
+            <button id="btn-install-hooks" class="mc-btn mc-btn-gold">
+              <span>⚡ AUTO-INSTALL ALL HOOKS</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 4: Redstone Repeater (Settings & Tuning) -->
+      <section class="mc-card stone-card" id="settings-section">
+        <div class="card-header">
+          <span class="header-icon">🛠️</span>
+          <h2>CRAFTING BENCH</h2>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label for="input-debounce">ANTIGRAVITY DEBOUNCE (MS):</label>
+            <div class="slider-container">
+              <input type="range" id="input-debounce" min="500" max="5000" step="500" value="2000">
+              <span id="debounce-val" class="highlight-cyan">2000ms</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="input-patterns">WINDOW TITLE PATTERNS (CSV):</label>
+            <input type="text" id="input-patterns" class="mc-input" value="Claude, Antigravity, Visual Studio Code, Terminal">
+          </div>
+
+          <div class="button-group">
+            <button id="btn-save-settings" class="mc-btn mc-btn-green">
+              <span>💾 SAVE CONFIG</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Chat Console / Logs -->
+    <section class="mc-card bedrock-card chat-section">
+      <div class="card-header">
+        <span class="header-icon">📜</span>
+        <h2>MINECRAFT CHAT LOG</h2>
+        <div class="chat-controls">
+          <button id="btn-refresh-logs" class="mc-btn mc-btn-small">REFRESH</button>
+          <button id="btn-clear-logs" class="mc-btn mc-btn-small">CLEAR</button>
+        </div>
+      </div>
+      <div class="chat-log-window" id="chat-logs">
+        <div class="chat-line"><span class="chat-sender">&lt;System&gt;</span> focusmgr initialized. Ready to loop!</div>
+        <div class="chat-line"><span class="chat-sender">&lt;Redstone&gt;</span> Win32 Foreground lock bypass loaded.</div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="mc-footer">
+      <div>FOCUSMGR v1.0.0 &bull; CRAFTED FOR SPEED (&lt;50MS) &bull; WINDOWS 10 / 11</div>
+      <div class="footer-hint">Press <b>ESC</b> or minimize to let hooks run freely in background</div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

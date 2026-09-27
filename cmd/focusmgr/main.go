@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"os"
@@ -11,22 +12,29 @@ import (
 	"focusmgr/internal/config"
 	"focusmgr/internal/installer"
 	"focusmgr/internal/logger"
+	"focusmgr/internal/server"
 	"focusmgr/internal/state"
 	"focusmgr/internal/win32"
 )
+
+//go:embed ui/*
+var embeddedUI embed.FS
 
 var version = "1.0.0"
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(0)
+		// Default when double-clicked from Windows Explorer: launch the Minecraft Pixel UI!
+		runUI()
+		return
 	}
 
 	command := os.Args[1]
 	args := os.Args[2:]
 
 	switch command {
+	case "ui", "gui", "dashboard":
+		runUI()
 	case "save-and-focus":
 		handleSaveAndFocus(args)
 	case "restore":
@@ -39,8 +47,17 @@ func main() {
 		handleTestFocus()
 	case "version", "--version", "-v":
 		fmt.Printf("focusmgr version %s (Windows x64)\n", version)
+	case "help", "--help", "-h":
+		printUsage()
 	default:
 		printUsage()
+	}
+}
+
+func runUI() {
+	port := 48123
+	if err := server.StartServer(port, embeddedUI); err != nil {
+		fmt.Printf("Failed to launch UI server: %v\n", err)
 	}
 }
 
