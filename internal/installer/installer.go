@@ -31,8 +31,9 @@ func InstallClaudeHooks(focusmgrPath string) error {
 		hooksObj = make(map[string]interface{})
 	}
 
-	stopCmd := fmt.Sprintf("\"%s\" save-and-focus --agent claude-code --session $CLAUDE_SESSION_ID", focusmgrPath)
-	promptCmd := fmt.Sprintf("\"%s\" restore --agent claude-code --session $CLAUDE_SESSION_ID", focusmgrPath)
+	stopCmd := fmt.Sprintf("\"%s\" hook --event Stop --agent claude-code", focusmgrPath)
+	notifyCmd := fmt.Sprintf("\"%s\" hook --event Notification --agent claude-code", focusmgrPath)
+	promptCmd := fmt.Sprintf("\"%s\" hook --event UserPromptSubmit --agent claude-code", focusmgrPath)
 
 	hooksObj["Stop"] = []interface{}{
 		map[string]interface{}{
@@ -41,6 +42,18 @@ func InstallClaudeHooks(focusmgrPath string) error {
 				map[string]interface{}{
 					"type":    "command",
 					"command": stopCmd,
+				},
+			},
+		},
+	}
+
+	hooksObj["Notification"] = []interface{}{
+		map[string]interface{}{
+			"matcher": "",
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": notifyCmd,
 				},
 			},
 		},
@@ -80,8 +93,8 @@ func InstallAntigravityHooks(focusmgrPath string, workspaceDir string) error {
 		targetPaths = append(targetPaths, filepath.Join(home, ".gemini", "config", "hooks.json"))
 	}
 
-	stopCmd := fmt.Sprintf("\"%s\" save-and-focus --agent antigravity --session %%conversationId%%", focusmgrPath)
-	preCmd := fmt.Sprintf("\"%s\" restore --agent antigravity --session %%conversationId%%", focusmgrPath)
+	stopCmd := fmt.Sprintf("\"%s\" hook --event Stop --agent antigravity", focusmgrPath)
+	preCmd := fmt.Sprintf("\"%s\" hook --event PreInvocation --agent antigravity", focusmgrPath)
 
 	type HookDef struct {
 		Event   string `json:"event"`
@@ -101,7 +114,6 @@ func InstallAntigravityHooks(focusmgrPath string, workspaceDir string) error {
 			_ = json.Unmarshal(data, &hf)
 		}
 
-		// Filter out any existing focusmgr entries
 		filtered := []HookDef{}
 		for _, h := range hf.Hooks {
 			if h.Event != "Stop" && h.Event != "PreInvocation" {

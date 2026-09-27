@@ -26,152 +26,158 @@
           <h1 class="pixel-title">FOCUSMGR</h1>
           <div class="pixel-subtitle">AUTO-FOCUS WINDOW MANAGER FOR AI AGENTS</div>
         </div>
-        <span class="pixel-badge badge-live">● ACTIVE</span>
+        <span class="pixel-badge badge-live" id="system-status-badge">● IDLE</span>
       </div>
     </header>
 
     <!-- Main Grid -->
     <main class="dashboard-grid">
-      <!-- Card 1: Active Window Radar -->
-      <section class="pixel-card dark-card" id="radar-section">
+      <!-- Card 1: AI Agent Selector (Autodetected) -->
+      <section class="pixel-card dark-card" id="agent-selector-section">
         <div class="card-header">
-          <span class="header-icon">🧭</span>
-          <h2>WINDOW RADAR</h2>
-          <span class="radar-ping" id="radar-indicator">LIVE</span>
+          <span class="header-icon">🤖</span>
+          <h2>1. SELECT AI AGENT</h2>
+          <span class="radar-ping" id="agent-count-badge">AUTO-DETECTED</span>
         </div>
         <div class="card-body">
           <div class="radar-box">
             <div class="stat-row">
-              <span class="stat-label">CURRENT TARGET:</span>
-              <span class="stat-value highlight-gold" id="current-window-title">Detecting...</span>
+              <span class="stat-label">ACTIVE AGENT:</span>
+              <span class="stat-value highlight-gold" id="selected-agent-name">None Selected</span>
             </div>
             <div class="stat-row">
-              <span class="stat-label">HWND HANDLE:</span>
-              <span class="stat-value highlight-cyan" id="current-window-hwnd">0</span>
-            </div>
-            <div class="stat-row">
-              <span class="stat-label">ACTIVE SESSIONS:</span>
-              <span class="stat-value highlight-emerald" id="active-sessions-count">0</span>
+              <span class="stat-label">AGENT HWND:</span>
+              <span class="stat-value highlight-cyan" id="selected-agent-hwnd">0</span>
             </div>
           </div>
+
+          <div class="form-group">
+            <label for="select-detected-agents">DETECTED RUNNING AGENTS:</label>
+            <select id="select-detected-agents" class="pixel-select">
+              <option value="">Scanning for agents (Antigravity, Claude, Codex)...</option>
+            </select>
+          </div>
+
           <div class="button-group">
-            <button id="btn-refresh-radar" class="pixel-btn pixel-btn-green">
-              <span>🔄 SCAN WINDOWS</span>
+            <button id="btn-refresh-agents" class="pixel-btn pixel-btn-green">
+              <span>🔄 SCAN FOR AGENTS</span>
             </button>
           </div>
         </div>
       </section>
 
-      <!-- Card 2: Focus Switcher (Test & Manual Controls) -->
-      <section class="pixel-card purple-card" id="teleport-section">
+      <!-- Card 2: Target Work / Gaming Window -->
+      <section class="pixel-card purple-card" id="work-selector-section">
         <div class="card-header">
-          <span class="header-icon">🔮</span>
-          <h2>FOCUS CONTROLS</h2>
-          <span class="badge-purple">AUTOMATED</span>
+          <span class="header-icon">🎯</span>
+          <h2>2. TARGET WORK / GAMING WINDOW</h2>
+          <span class="badge-purple">AUTO-SWITCH TARGET</span>
         </div>
         <div class="card-body">
-          <p class="teleport-desc">
-            Test the instant focus loop or manually trigger window transitions.
-          </p>
-          <div class="teleport-actions">
-            <button id="btn-test-teleport" class="pixel-btn pixel-btn-diamond pulse-btn">
-              <span>✨ TEST FOCUS SWITCH (3s)</span>
-            </button>
-            <div class="dual-buttons">
-              <button id="btn-manual-save" class="pixel-btn pixel-btn-dark">
-                <span>📥 SAVE & FOCUS</span>
-              </button>
-              <button id="btn-manual-restore" class="pixel-btn pixel-btn-dark">
-                <span>📤 RESTORE USER</span>
-              </button>
+          <div class="radar-box">
+            <div class="stat-row">
+              <span class="stat-label">TARGET WINDOW:</span>
+              <span class="stat-value highlight-emerald" id="selected-work-name">None Selected</span>
+            </div>
+            <div class="stat-row">
+              <span class="stat-label">TARGET HWND:</span>
+              <span class="stat-value highlight-cyan" id="selected-work-hwnd">0</span>
             </div>
           </div>
-          <!-- Countdown Overlay Modal (Hidden by default) -->
+
+          <div class="teleport-actions">
+            <!-- Fast Pick by Switching -->
+            <button id="btn-pick-by-switch" class="pixel-btn pixel-btn-diamond pulse-btn">
+              <span>🎯 PICK BY SWITCHING (3s TIMER)</span>
+            </button>
+            <div class="form-group">
+              <label for="select-open-apps">OR CHOOSE FROM OPEN APPS:</label>
+              <select id="select-open-apps" class="pixel-select">
+                <option value="">Loading open windows...</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Countdown Overlay Modal -->
           <div id="countdown-banner" class="countdown-banner hidden">
-            <div class="countdown-text" id="countdown-text">SWITCHING IN 3...</div>
-            <div class="countdown-subtext" id="countdown-subtext">Click on any other window now!</div>
+            <div class="countdown-text" id="countdown-text">SWITCH TO WINDOW IN 3...</div>
+            <div class="countdown-subtext" id="countdown-subtext">Click into your Game, Browser, or App NOW!</div>
           </div>
         </div>
       </section>
 
-      <!-- Card 3: Agent Hooks -->
+      <!-- Card 3: Modes & Workflow Rules -->
+      <section class="pixel-card dark-card" id="modes-section">
+        <div class="card-header">
+          <span class="header-icon">🎮</span>
+          <h2>3. WORKFLOW & GAMING MODES</h2>
+        </div>
+        <div class="card-body">
+          <div class="mode-toggles-container">
+            <!-- Gaming Mode Toggle -->
+            <label class="toggle-card">
+              <input type="checkbox" id="toggle-gaming-mode">
+              <div class="toggle-content">
+                <span class="toggle-title">🎮 GAMING MODE (NOTIFICATION ONLY)</span>
+                <span class="toggle-desc">Show Windows notification for permission only. NEVER steal focus while you are gaming or doing critical work!</span>
+              </div>
+            </label>
+
+            <!-- Auto-Switch Toggle -->
+            <label class="toggle-card">
+              <input type="checkbox" id="toggle-auto-switch" checked>
+              <div class="toggle-content">
+                <span class="toggle-title">⚡ AUTO-SWITCH ON TASK SUBMIT</span>
+                <span class="toggle-desc">When you prompt the agent, immediately switch back to your work/game window while it executes.</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="button-group">
+            <button id="btn-test-loop" class="pixel-btn pixel-btn-gold">
+              <span>✨ TEST COMPLETE FOCUS LOOP</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 4: Agent Hook Integrations -->
       <section class="pixel-card brown-card" id="hooks-section">
         <div class="card-header">
           <span class="header-icon">🔗</span>
-          <h2>AGENT HOOKS</h2>
-          <span class="badge-red" id="hooks-status-badge">READY</span>
+          <h2>4. HOOK INTEGRATION</h2>
+          <span class="badge-red" id="hooks-status-badge">AUTO-INSTALLED</span>
         </div>
         <div class="card-body">
           <div class="agent-list">
-            <!-- Claude Code -->
             <div class="agent-item">
               <div class="agent-info">
-                <span class="status-dot active" id="dot-claude"></span>
-                <span class="agent-name">Claude Code</span>
-                <span class="agent-hook-info">Stop + UserPromptSubmit</span>
-              </div>
-              <span class="hook-badge active">COMPATIBLE</span>
-            </div>
-
-            <!-- Antigravity -->
-            <div class="agent-item">
-              <div class="agent-info">
-                <span class="status-dot active" id="dot-antigravity"></span>
+                <span class="status-dot active"></span>
                 <span class="agent-name">Antigravity</span>
-                <span class="agent-hook-info">Stop + PreInvocation</span>
+                <span class="agent-hook-info">PreInvocation + Stop</span>
               </div>
-              <span class="hook-badge active">INSTALLED</span>
+              <span class="hook-badge active">READY</span>
             </div>
-
-            <!-- Codex -->
             <div class="agent-item">
               <div class="agent-info">
-                <span class="status-dot" id="dot-codex"></span>
-                <span class="agent-name">OpenAI Codex</span>
-                <span class="agent-hook-info">Claude Hook Specs</span>
+                <span class="status-dot active"></span>
+                <span class="agent-name">Claude Code</span>
+                <span class="agent-hook-info">UserPromptSubmit + Stop + Notification</span>
               </div>
-              <span class="hook-badge">READY</span>
+              <span class="hook-badge active">READY</span>
             </div>
           </div>
 
           <div class="button-group">
-            <button id="btn-install-hooks" class="pixel-btn pixel-btn-gold">
-              <span>⚡ AUTO-INSTALL ALL HOOKS</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Card 4: Settings & Tuning -->
-      <section class="pixel-card dark-card" id="settings-section">
-        <div class="card-header">
-          <span class="header-icon">🛠️</span>
-          <h2>SETTINGS & TUNING</h2>
-        </div>
-        <div class="card-body">
-          <div class="form-group">
-            <label for="input-debounce">ANTIGRAVITY DEBOUNCE (MS):</label>
-            <div class="slider-container">
-              <input type="range" id="input-debounce" min="500" max="5000" step="500" value="2000">
-              <span id="debounce-val" class="highlight-cyan">2000ms</span>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="input-patterns">WINDOW TITLE PATTERNS (CSV):</label>
-            <input type="text" id="input-patterns" class="pixel-input" value="Claude, Antigravity, Visual Studio Code, Terminal">
-          </div>
-
-          <div class="button-group">
-            <button id="btn-save-settings" class="pixel-btn pixel-btn-green">
-              <span>💾 SAVE CONFIG</span>
+            <button id="btn-reinstall-hooks" class="pixel-btn pixel-btn-dark">
+              <span>🔄 RE-INSTALL / VERIFY HOOKS</span>
             </button>
           </div>
         </div>
       </section>
     </main>
 
-    <!-- Chat Console / Logs -->
+    <!-- Activity Console / Logs -->
     <section class="pixel-card bedrock-card chat-section">
       <div class="card-header">
         <span class="header-icon">📜</span>
@@ -183,14 +189,13 @@
       </div>
       <div class="chat-log-window" id="chat-logs">
         <div class="chat-line"><span class="chat-sender">&lt;System&gt;</span> focusmgr initialized. Ready to loop!</div>
-        <div class="chat-line"><span class="chat-sender">&lt;Core&gt;</span> Win32 Foreground lock bypass loaded.</div>
       </div>
     </section>
 
     <!-- Footer -->
     <footer class="pixel-footer">
-      <div>FOCUSMGR v1.0.0 &bull; SUB-50MS CONTEXT SWITCHER &bull; WINDOWS 10 / 11</div>
-      <div class="footer-hint">Press <b>ESC</b> or minimize to let hooks run freely in background</div>
+      <div>FOCUSMGR v1.1.0 &bull; GAMING & CONTEXT SWITCHING MANAGER &bull; WINDOWS 10 / 11</div>
+      <div class="footer-hint">Leave this dashboard running in background to manage auto-switching</div>
     </footer>
   </div>
 

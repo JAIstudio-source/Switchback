@@ -1,8 +1,7 @@
 // ==========================================================================
-// RETRO COLOURFUL PIXEL LOGIC & AUDIO SYNTHESIZER FOR FOCUSMGR
+// RETRO COLOURFUL PIXEL LOGIC & CONTROLLER FOR FOCUSMGR v1.1.0
 // ==========================================================================
 
-// Sound Synthesizer via Web Audio API (Zero external audio files needed!)
 class PixelAudio {
   constructor() {
     this.ctx = null;
@@ -16,7 +15,6 @@ class PixelAudio {
     }
   }
 
-  // Classic button click sound
   playClick() {
     if (!this.enabled) return;
     this.init();
@@ -37,7 +35,6 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.05);
   }
 
-  // Focus switch sound
   playWarp() {
     if (!this.enabled) return;
     this.init();
@@ -58,7 +55,6 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.3);
   }
 
-  // Countdown beep (8-bit square wave)
   playBeep(pitch = 520) {
     if (!this.enabled) return;
     this.init();
@@ -78,7 +74,6 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.08);
   }
 
-  // Success fanfare
   playFanfare() {
     if (!this.enabled) return;
     this.init();
@@ -100,16 +95,24 @@ class PixelAudio {
 
 const audio = new PixelAudio();
 
-// DOM Elements
-const currentTitleEl = document.getElementById('current-window-title');
-const currentHwndEl = document.getElementById('current-window-hwnd');
-const activeSessionsEl = document.getElementById('active-sessions-count');
+// Elements
+const selectAgentsEl = document.getElementById('select-detected-agents');
+const selectAppsEl = document.getElementById('select-open-apps');
+const selectedAgentNameEl = document.getElementById('selected-agent-name');
+const selectedAgentHwndEl = document.getElementById('selected-agent-hwnd');
+const selectedWorkNameEl = document.getElementById('selected-work-name');
+const selectedWorkHwndEl = document.getElementById('selected-work-hwnd');
+const toggleGamingEl = document.getElementById('toggle-gaming-mode');
+const toggleAutoSwitchEl = document.getElementById('toggle-auto-switch');
+const statusBadgeEl = document.getElementById('system-status-badge');
 const chatLogsEl = document.getElementById('chat-logs');
 const countdownBanner = document.getElementById('countdown-banner');
 const countdownText = document.getElementById('countdown-text');
-const countdownSubtext = document.getElementById('countdown-subtext');
 
-// Append line to Chat / Activity Console
+let detectedAgentsList = [];
+let openAppsList = [];
+
+// Log helper
 function logChat(sender, message, type = 'info') {
   const line = document.createElement('div');
   line.className = `chat-line ${type}`;
@@ -128,22 +131,74 @@ function escapeHtml(str) {
   }[tag] || tag));
 }
 
-// Fetch Status & Window Radar from API
+// Fetch open windows and populate selectors
+async function fetchWindows() {
+  try {
+    const res = await fetch('/api/windows');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    detectedAgentsList = data.agents || [];
+    openAppsList = data.work_apps || [];
+
+    // Populate Agents Dropdown
+    selectAgentsEl.innerHTML = '';
+    if (detectedAgentsList.length === 0) {
+      selectAgentsEl.innerHTML = '<option value="">No agents found (launch Antigravity/Claude)</option>';
+    } else {
+      selectAgentsEl.innerHTML = '<option value="">-- Choose an AI Agent Window --</option>';
+      detectedAgentsList.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.hwnd;
+        opt.textContent = `[${a.agent_type.toUpperCase()}] ${a.title} (${a.process_name})`;
+        selectAgentsEl.appendChild(opt);
+      });
+    }
+
+    // Populate Open Apps Dropdown
+    selectAppsEl.innerHTML = '<option value="">-- Or choose from running windows --</option>';
+    openAppsList.forEach(w => {
+      const opt = document.createElement('option');
+      opt.value = w.hwnd;
+      opt.textContent = `${w.title} (${w.process_name})`;
+      selectAppsEl.appendChild(opt);
+    });
+
+  } catch (e) {}
+}
+
+// Fetch active status
 async function fetchStatus() {
   try {
     const res = await fetch('/api/status');
     if (!res.ok) return;
     const data = await res.json();
 
-    currentTitleEl.textContent = data.current_title || 'None / Desktop';
-    currentHwndEl.textContent = data.current_hwnd || '0';
-    activeSessionsEl.textContent = data.active_sessions || '0';
-  } catch (e) {
-    // Local static fallback mode
-  }
+    selectedAgentNameEl.textContent = data.selected_agent_title || 'None Selected (Auto-resolve)';
+    selectedAgentHwndEl.textContent = data.selected_agent_hwnd || '0';
+
+    selectedWorkNameEl.textContent = data.selected_work_title || 'None Selected (Click Pick)';
+    selectedWorkHwndEl.textContent = data.selected_work_hwnd || '0';
+
+    toggleGamingEl.checked = !!data.gaming_mode;
+    toggleAutoSwitchEl.checked = !!data.auto_switch_enabled;
+
+    // Status badge
+    if (data.current_status === 'agent_working') {
+      statusBadgeEl.textContent = '⚡ AGENT WORKING';
+      statusBadgeEl.style.background = 'var(--pixel-diamond)';
+    } else if (data.current_status === 'permission_needed') {
+      statusBadgeEl.textContent = '🔔 NEEDS PERMISSION';
+      statusBadgeEl.style.background = 'var(--pixel-gold)';
+    } else {
+      statusBadgeEl.textContent = '● IDLE / READY';
+      statusBadgeEl.style.background = 'var(--pixel-emerald)';
+    }
+
+  } catch (e) {}
 }
 
-// Poll logs
+// Poll server logs
 async function fetchLogs() {
   try {
     const res = await fetch('/api/logs');
@@ -154,55 +209,74 @@ async function fetchLogs() {
       lines.forEach(l => {
         let type = 'info';
         if (l.includes('[ERROR]')) type = 'error';
-        else if (l.includes('[WARN]')) type = 'warn';
-        else if (l.includes('Successfully')) type = 'success';
+        else if (l.includes('[GamingMode]')) type = 'warn';
+        else if (l.includes('[AutoSwitch]')) type = 'success';
         logChat('System', l, type);
       });
     }
   } catch (e) {}
 }
 
-// Countdown Focus Switch Test
-async function runTeleportTest() {
+// Pick Work Window by fast switching
+async function pickBySwitching() {
   audio.playClick();
   countdownBanner.classList.remove('hidden');
 
   let seconds = 3;
-  countdownText.textContent = `SWITCHING IN ${seconds}...`;
-  countdownSubtext.textContent = `Click into ANY other window (e.g. Browser, Notepad) NOW!`;
+  countdownText.textContent = `SWITCH TO WINDOW IN ${seconds}...`;
   audio.playBeep(440);
 
-  const timer = setInterval(async () => {
+  // Send request immediately to let server sleep 3.2s and capture
+  const switchPromise = fetch('/api/pick-work-switch', { method: 'POST' }).then(r => r.json());
+
+  const timer = setInterval(() => {
     seconds--;
     if (seconds > 0) {
-      countdownText.textContent = `SWITCHING IN ${seconds}...`;
+      countdownText.textContent = `SWITCH TO WINDOW IN ${seconds}...`;
       audio.playBeep(440 + (3 - seconds) * 100);
     } else {
       clearInterval(timer);
-      countdownText.textContent = `⚡ FOCUS SWITCH TRIGGERED!`;
-      countdownSubtext.textContent = `Restoring window handle...`;
-      audio.playWarp();
-
-      try {
-        const res = await fetch('/api/test-focus', { method: 'POST' });
-        const resData = await res.json();
-        logChat('Focus', `Focus switch complete: ${resData.message || 'Restored'}`, 'success');
-        audio.playFanfare();
-      } catch (err) {
-        logChat('Focus', `Switch trigger sent locally.`, 'info');
-      }
-
-      setTimeout(() => {
-        countdownBanner.classList.add('hidden');
-        fetchStatus();
-      }, 1500);
+      countdownText.textContent = `CAPTURING ACTIVE WINDOW...`;
     }
   }, 1000);
+
+  const res = await switchPromise;
+  countdownBanner.classList.add('hidden');
+
+  if (res.success) {
+    audio.playFanfare();
+    logChat('Target', `Locked in Work Window: ${res.title} (HWND: ${res.hwnd})`, 'success');
+    fetchStatus();
+  } else {
+    logChat('Target', res.message || 'Failed to capture window.', 'error');
+  }
 }
 
-// Setup Event Listeners
+// Save Mode changes
+async function updateModes() {
+  audio.playClick();
+  const gaming = toggleGamingEl.checked;
+  const autoSwitch = toggleAutoSwitchEl.checked;
+
+  try {
+    await fetch('/api/toggle-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gaming_mode: gaming, auto_switch_enabled: autoSwitch })
+    });
+
+    if (gaming) {
+      logChat('Mode', '🎮 Gaming Mode ENABLED: Notifications only for permissions (No focus stealing).', 'warn');
+    } else {
+      logChat('Mode', '⚡ Gaming Mode DISABLED: Focus will automatically switch to agent on permissions.', 'info');
+    }
+    fetchStatus();
+  } catch (e) {}
+}
+
+// Event Listeners
 function setupEvents() {
-  // Sound Toggle
+  // Sound
   const soundBtn = document.getElementById('btn-sound-toggle');
   const soundStatus = document.getElementById('sound-status');
   const soundIcon = document.getElementById('sound-icon');
@@ -213,87 +287,80 @@ function setupEvents() {
     if (audio.enabled) audio.playClick();
   });
 
-  // Radar Scan
-  document.getElementById('btn-refresh-radar').addEventListener('click', () => {
+  // Refresh Agents
+  document.getElementById('btn-refresh-agents').addEventListener('click', () => {
     audio.playClick();
-    logChat('Radar', 'Scanning active windows on Windows Desktop...', 'info');
-    fetchStatus();
+    logChat('Radar', 'Scanning running processes for AI agents...', 'info');
+    fetchWindows();
   });
 
-  // Test Focus Switch
-  document.getElementById('btn-test-teleport').addEventListener('click', runTeleportTest);
-
-  // Manual Save & Focus
-  document.getElementById('btn-manual-save').addEventListener('click', async () => {
-    audio.playClick();
-    logChat('User', 'Triggering manual save-and-focus...', 'info');
-    try {
-      await fetch('/api/save-and-focus', { method: 'POST' });
-      audio.playWarp();
-      logChat('System', 'Saved foreground window and focused agent!', 'success');
+  // Select Agent from Dropdown
+  selectAgentsEl.addEventListener('change', async () => {
+    const hwnd = parseInt(selectAgentsEl.value, 10);
+    if (!hwnd) return;
+    const selected = detectedAgentsList.find(a => a.hwnd === hwnd);
+    if (selected) {
+      audio.playClick();
+      await fetch('/api/select-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hwnd: selected.hwnd, title: selected.title, agent_type: selected.agent_type })
+      });
+      logChat('Agent', `Selected Agent: ${selected.title}`, 'success');
       fetchStatus();
-    } catch (e) {
-      logChat('System', 'Command dispatched.', 'info');
     }
   });
 
-  // Manual Restore
-  document.getElementById('btn-manual-restore').addEventListener('click', async () => {
-    audio.playClick();
-    logChat('User', 'Triggering manual restore...', 'info');
-    try {
-      await fetch('/api/restore', { method: 'POST' });
-      audio.playWarp();
-      logChat('System', 'Restored previous user working window!', 'success');
+  // Select Work App from Dropdown
+  selectAppsEl.addEventListener('change', async () => {
+    const hwnd = parseInt(selectAppsEl.value, 10);
+    if (!hwnd) return;
+    const selected = openAppsList.find(w => w.hwnd === hwnd);
+    if (selected) {
+      audio.playClick();
+      await fetch('/api/select-work', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hwnd: selected.hwnd, title: selected.title })
+      });
+      logChat('Target', `Selected Work Window: ${selected.title}`, 'success');
       fetchStatus();
-    } catch (e) {
-      logChat('System', 'Command dispatched.', 'info');
     }
   });
 
-  // Auto-Install All Hooks
-  document.getElementById('btn-install-hooks').addEventListener('click', async () => {
+  // Pick by switching button
+  document.getElementById('btn-pick-by-switch').addEventListener('click', pickBySwitching);
+
+  // Toggles
+  toggleGamingEl.addEventListener('change', updateModes);
+  toggleAutoSwitchEl.addEventListener('change', updateModes);
+
+  // Test loop
+  document.getElementById('btn-test-loop').addEventListener('click', async () => {
+    audio.playWarp();
+    logChat('Test', 'Triggering complete focus loop test...', 'info');
+    try {
+      const res = await fetch('/api/test-focus', { method: 'POST' });
+      const data = await res.json();
+      logChat('Test', data.message, 'success');
+    } catch (e) {}
+  });
+
+  // Re-install hooks
+  document.getElementById('btn-reinstall-hooks').addEventListener('click', async () => {
     audio.playClick();
-    logChat('Hook', 'Configuring hooks for Claude Code & Antigravity...', 'warn');
     try {
       const res = await fetch('/api/install', { method: 'POST' });
       const data = await res.json();
       audio.playFanfare();
-      logChat('Hook', data.message || 'All hooks installed successfully!', 'success');
-    } catch (e) {
-      logChat('Hook', 'Hooks configuration updated.', 'success');
-    }
+      logChat('Hook', data.message || 'Hooks installed successfully!', 'success');
+    } catch (e) {}
   });
 
-  // Settings Save
-  const debounceInput = document.getElementById('input-debounce');
-  const debounceVal = document.getElementById('debounce-val');
-  debounceInput.addEventListener('input', () => {
-    debounceVal.textContent = `${debounceInput.value}ms`;
-  });
-
-  document.getElementById('btn-save-settings').addEventListener('click', async () => {
-    audio.playClick();
-    const patterns = document.getElementById('input-patterns').value.split(',').map(s => s.trim());
-    const debounce = parseInt(debounceInput.value, 10);
-    try {
-      await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ debounce_ms: debounce, patterns: patterns })
-      });
-      audio.playFanfare();
-      logChat('Config', 'Configuration saved to %LOCALAPPDATA%\\focusmgr\\config.json', 'success');
-    } catch (e) {
-      logChat('Config', 'Settings applied locally.', 'info');
-    }
-  });
-
-  // Console Clear
+  // Clear logs
   document.getElementById('btn-clear-logs').addEventListener('click', () => {
     audio.playClick();
     chatLogsEl.innerHTML = '';
-    logChat('System', 'Log display cleared.');
   });
 
   document.getElementById('btn-refresh-logs').addEventListener('click', () => {
@@ -302,12 +369,12 @@ function setupEvents() {
   });
 }
 
-// Initial Boot
 document.addEventListener('DOMContentLoaded', () => {
   setupEvents();
+  fetchWindows();
   fetchStatus();
   fetchLogs();
 
-  // Periodic radar ping (every 2.5 seconds)
-  setInterval(fetchStatus, 2500);
+  setInterval(fetchStatus, 2000);
+  setInterval(fetchLogs, 3000);
 });

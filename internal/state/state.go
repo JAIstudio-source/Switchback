@@ -19,8 +19,16 @@ type SessionState struct {
 }
 
 type Store struct {
-	Version  int                     `json:"version"`
-	Sessions map[string]SessionState `json:"sessions"`
+	Version            int                     `json:"version"`
+	SelectedAgentHWND  uintptr                 `json:"selected_agent_hwnd"`
+	SelectedAgentTitle string                  `json:"selected_agent_title"`
+	SelectedAgentType  string                  `json:"selected_agent_type"`
+	SelectedWorkHWND   uintptr                 `json:"selected_work_hwnd"`
+	SelectedWorkTitle  string                  `json:"selected_work_title"`
+	GamingMode         bool                    `json:"gaming_mode"`          // Notification only for permission
+	AutoSwitchEnabled  bool                    `json:"auto_switch_enabled"`  // Auto switch when task sent / done
+	CurrentStatus      string                  `json:"current_status"`       // "idle", "running", "permission_needed"
+	Sessions           map[string]SessionState `json:"sessions"`
 }
 
 var mu sync.Mutex
@@ -53,8 +61,11 @@ func Load() (*Store, error) {
 	}
 
 	store := &Store{
-		Version:  1,
-		Sessions: make(map[string]SessionState),
+		Version:           1,
+		AutoSwitchEnabled: true,
+		GamingMode:        false,
+		CurrentStatus:     "idle",
+		Sessions:          make(map[string]SessionState),
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -70,7 +81,6 @@ func Load() (*Store, error) {
 	}
 
 	if err := json.Unmarshal(data, store); err != nil {
-		// Corrupted or incompatible, reset cleanly
 		return store, nil
 	}
 	if store.Sessions == nil {
@@ -102,7 +112,6 @@ func (s *Store) Save() error {
 
 	// Atomic replace
 	if err := os.Rename(tmpPath, filePath); err != nil {
-		// If atomic rename fails on Windows because file exists, remove and rename
 		_ = os.Remove(filePath)
 		if err := os.Rename(tmpPath, filePath); err != nil {
 			_ = os.Remove(tmpPath)
@@ -113,7 +122,51 @@ func (s *Store) Save() error {
 	return nil
 }
 
-// SaveSession updates or creates a session entry and saves the store.
+// SetSelectedAgent stores the active agent window.
+func SetSelectedAgent(hwnd uintptr, title, agentType string) error {
+	store, err := Load()
+	if err != nil {
+		return err
+	}
+	store.SelectedAgentHWND = hwnd
+	store.SelectedAgentTitle = title
+	store.SelectedAgentType = agentType
+	return store.Save()
+}
+
+// SetSelectedWork stores the active user work/gaming window.
+func SetSelectedWork(hwnd uintptr, title string) error {
+	store, err := Load()
+	if err != nil {
+		return err
+	}
+	store.SelectedWorkHWND = hwnd
+	store.SelectedWorkTitle = title
+	return store.Save()
+}
+
+// SetModes updates the gaming mode and autoswitch mode toggles.
+func SetModes(gamingMode, autoSwitch bool) error {
+	store, err := Load()
+	if err != nil {
+		return err
+	}
+	store.GamingMode = gamingMode
+	store.AutoSwitchEnabled = autoSwitch
+	return store.Save()
+}
+
+// SetStatus updates the active agent workflow status.
+func SetStatus(status string) error {
+	store, err := Load()
+	if err != nil {
+		return err
+	}
+	store.CurrentStatus = status
+	return store.Save()
+}
+
+// SaveSession updates or creates a session entry.
 func SaveSession(sessionID string, s SessionState) error {
 	store, err := Load()
 	if err != nil {
@@ -124,7 +177,7 @@ func SaveSession(sessionID string, s SessionState) error {
 	return store.Save()
 }
 
-// GetSession retrieves the session state for a given ID.
+// GetSession retrieves session state.
 func GetSession(sessionID string) (SessionState, bool, error) {
 	store, err := Load()
 	if err != nil {
@@ -132,14 +185,4 @@ func GetSession(sessionID string) (SessionState, bool, error) {
 	}
 	s, found := store.Sessions[sessionID]
 	return s, found, nil
-}
-
-// ClearSession removes a session from tracking.
-func ClearSession(sessionID string) error {
-	store, err := Load()
-	if err != nil {
-		return err
-	}
-	delete(store.Sessions, sessionID)
-	return store.Save()
 }

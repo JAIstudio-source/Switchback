@@ -80,7 +80,7 @@ body.pixel-theme {
     inset 4px 4px 0 var(--pixel-dark-light),
     inset -4px -4px 0 var(--pixel-darker),
     0 8px 0 rgba(0, 0, 0, 0.4);
-  padding: 24px 20px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -92,7 +92,7 @@ body.pixel-theme {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  max-width: 800px;
+  max-width: 880px;
 }
 
 .title-text-group {
@@ -100,7 +100,7 @@ body.pixel-theme {
 }
 
 .pixel-title {
-  font-size: 32px;
+  font-size: 30px;
   color: var(--pixel-gold);
   text-shadow: 
     3px 3px 0 var(--pixel-gold-dark),
@@ -218,12 +218,6 @@ body.pixel-theme {
   color: #000;
   padding: 3px 6px;
   border: 2px solid #000;
-  animation: radarBlink 1.5s infinite;
-}
-
-@keyframes radarBlink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
 }
 
 .badge-purple {
@@ -251,7 +245,7 @@ body.pixel-theme {
   gap: 14px;
 }
 
-/* Radar Details Box */
+/* Radar & Details Box */
 .radar-box {
   background: rgba(0, 0, 0, 0.4);
   border: 2px solid #000;
@@ -275,7 +269,7 @@ body.pixel-theme {
 .stat-value {
   font-family: var(--font-vt);
   font-size: 18px;
-  max-width: 260px;
+  max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -313,7 +307,6 @@ body.pixel-theme {
   font-size: 8px;
 }
 
-/* Button Themes */
 .pixel-btn-green {
   background: var(--pixel-emerald);
   color: #000;
@@ -359,21 +352,6 @@ body.pixel-theme {
   flex: 1;
 }
 
-.dual-buttons {
-  display: flex;
-  gap: 10px;
-}
-
-.dual-buttons .pixel-btn {
-  flex: 1;
-}
-
-.teleport-desc {
-  font-size: 9px;
-  color: #ccc;
-  line-height: 1.5;
-}
-
 .teleport-actions {
   display: flex;
   flex-direction: column;
@@ -382,7 +360,7 @@ body.pixel-theme {
 
 /* Countdown Banner */
 .countdown-banner {
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.9);
   border: 3px solid var(--pixel-diamond);
   padding: 16px;
   text-align: center;
@@ -402,7 +380,7 @@ body.pixel-theme {
 }
 
 .countdown-text {
-  font-size: 16px;
+  font-size: 15px;
   color: var(--pixel-gold);
   text-shadow: 2px 2px 0 #000;
 }
@@ -472,7 +450,71 @@ body.pixel-theme {
   font-weight: bold;
 }
 
-/* Forms & Inputs */
+/* Mode Toggles */
+.mode-toggles-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toggle-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid #555;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.toggle-card:hover {
+  border-color: var(--pixel-diamond);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.toggle-card input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--pixel-emerald);
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.toggle-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toggle-title {
+  font-size: 10px;
+  color: var(--pixel-gold);
+}
+
+.toggle-desc {
+  font-size: 8px;
+  color: #ccc;
+  line-height: 1.4;
+}
+
+/* Select Dropdown */
+.pixel-select {
+  font-family: var(--font-vt);
+  font-size: 18px;
+  background: #111;
+  color: #fff;
+  border: 2px solid #555;
+  padding: 8px 10px;
+  width: 100%;
+  cursor: pointer;
+  outline: none;
+}
+
+.pixel-select:focus {
+  border-color: var(--pixel-diamond);
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -482,32 +524,6 @@ body.pixel-theme {
 .form-group label {
   font-size: 9px;
   color: #ddd;
-}
-
-.slider-container {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-input[type="range"] {
-  flex: 1;
-  accent-color: var(--pixel-emerald);
-  cursor: pointer;
-}
-
-.pixel-input {
-  font-family: var(--font-vt);
-  font-size: 18px;
-  padding: 8px;
-  background: #111;
-  color: #fff;
-  border: 2px solid #555;
-  outline: none;
-}
-
-.pixel-input:focus {
-  border-color: var(--pixel-diamond);
 }
 
 /* Chat Log Box */

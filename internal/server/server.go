@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -12,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"focusmgr/internal/config"
 	"focusmgr/internal/installer"
 	"focusmgr/internal/logger"
+	"focusmgr/internal/notify"
 	"focusmgr/internal/state"
 	"focusmgr/internal/win32"
 )
@@ -25,12 +24,14 @@ func StartServer(port int, embeddedFS fs.FS) error {
 
 	// API Handlers
 	mux.HandleFunc("/api/status", handleStatus)
+	mux.HandleFunc("/api/windows", handleWindows)
+	mux.HandleFunc("/api/select-agent", handleSelectAgent)
+	mux.HandleFunc("/api/select-work", handleSelectWork)
+	mux.HandleFunc("/api/pick-work-switch", handlePickWorkSwitch)
+	mux.HandleFunc("/api/toggle-mode", handleToggleMode)
 	mux.HandleFunc("/api/test-focus", handleTestFocus)
-	mux.HandleFunc("/api/save-and-focus", handleSaveAndFocus)
-	mux.HandleFunc("/api/restore", handleRestore)
 	mux.HandleFunc("/api/install", handleInstall)
 	mux.HandleFunc("/api/logs", handleLogs)
-	mux.HandleFunc("/api/config", handleConfig)
 
 	// Static UI assets
 	var fileServer http.Handler
@@ -67,18 +68,140 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	title := win32.GetWindowTitle(fg)
 	store, _ := state.Load()
 
-	activeCount := 0
-	if store != nil {
-		activeCount = len(store.Sessions)
+	if store.SelectedAgentHWND != 0 && !win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
+		store.SelectedAgentHWND = 0
+		store.SelectedAgentTitle = ""
+		_ = store.Save()
+	}
+	if store.SelectedWorkHWND != 0 && !win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
+		store.SelectedWorkHWND = 0
+		store.SelectedWorkTitle = ""
+		_ = store.Save()
 	}
 
 	resp := map[string]interface{}{
-		"current_hwnd":    fmt.Sprintf("%d", fg),
-		"current_title":   title,
-		"active_sessions": activeCount,
+		"current_hwnd":         fmt.Sprintf("%d", fg),
+		"current_title":        title,
+		"selected_agent_hwnd":  store.SelectedAgentHWND,
+		"selected_agent_title": store.SelectedAgentTitle,
+		"selected_agent_type":  store.SelectedAgentType,
+		"selected_work_hwnd":   store.SelectedWorkHWND,
+		"selected_work_title":  store.SelectedWorkTitle,
+		"gaming_mode":          store.GamingMode,
+		"auto_switch_enabled":  store.AutoSwitchEnabled,
+		"current_status":       store.CurrentStatus,
+		"active_sessions":      len(store.Sessions),
 	}
 
 	writeJSON(w, resp)
+}
+
+func handleWindows(w http.ResponseWriter, r *http.Request) {
+	windowsList := win32.GetOpenWindows()
+
+	agents := []win32.WindowInfo{}
+	workApps := []win32.WindowInfo{}
+
+	for _, win := range windowsList {
+		if win.IsAgent {
+			agents = append(agents, win)
+		} else {
+			workApps = append(workApps, win)
+		}
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"agents":    agents,
+		"work_apps": workApps,
+	})
+}
+
+func handleSelectAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		HWND      uintptr `json:"hwnd"`
+		Title     string  `json:"title"`
+		AgentType string  `json:"agent_type"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	_ = state.SetSelectedAgent(req.HWND, req.Title, req.AgentType)
+	logger.Info("[Config] Selected Agent Window: HWND %d (\"%s\")", req.HWND, req.Title)
+	writeJSON(w, map[string]interface{}{"success": true})
+}
+
+func handleSelectWork(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		HWND  uintptr `json:"hwnd"`
+		Title string  `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	_ = state.SetSelectedWork(req.HWND, req.Title)
+	logger.Info("[Config] Selected Work/Gaming Window: HWND %d (\"%s\")", req.HWND, req.Title)
+	writeJSON(w, map[string]interface{}{"success": true})
+}
+
+func handlePickWorkSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Capture target window after 3.2 seconds countdown
+	time.Sleep(3200 * time.Millisecond)
+
+	fg := win32.GetForegroundWindow()
+	title := win32.GetWindowTitle(fg)
+
+	if fg != 0 && win32.IsWindowValid(fg) {
+		_ = state.SetSelectedWork(uintptr(fg), title)
+		logger.Info("[Config] Captured Work Window via switch: HWND %d (\"%s\")", fg, title)
+		writeJSON(w, map[string]interface{}{
+			"success": true,
+			"hwnd":    fg,
+			"title":   title,
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"success": false,
+		"message": "Failed to capture window. Try again.",
+	})
+}
+
+func handleToggleMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		GamingMode        bool `json:"gaming_mode"`
+		AutoSwitchEnabled bool `json:"auto_switch_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	_ = state.SetModes(req.GamingMode, req.AutoSwitchEnabled)
+	logger.Info("[Config] Updated modes - GamingMode: %v, AutoSwitch: %v", req.GamingMode, req.AutoSwitchEnabled)
+	writeJSON(w, map[string]interface{}{"success": true})
 }
 
 func handleTestFocus(w http.ResponseWriter, r *http.Request) {
@@ -87,72 +210,32 @@ func handleTestFocus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fg := win32.GetForegroundWindow()
-	title := win32.GetWindowTitle(fg)
+	store, _ := state.Load()
 
-	// Wait 1.5s, then switch back
-	go func(target win32.HWND) {
-		time.Sleep(1500 * time.Millisecond)
-		if win32.IsWindowValid(target) {
-			_ = win32.SetForegroundWindowWithBypass(target)
+	// Simulated test sequence
+	go func() {
+		// 1. Task start: switch to work window if set
+		if store.SelectedWorkHWND != 0 && win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
+			_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedWorkHWND))
+			logger.Info("[Test] Switched to Work Window: HWND %d", store.SelectedWorkHWND)
 		}
-	}(fg)
+
+		time.Sleep(2500 * time.Millisecond)
+
+		// 2. Permission requested
+		if store.GamingMode {
+			logger.Info("[Test] Gaming Mode: Sending Toast Notification for permission!")
+			notify.SendToast("focusmgr // AI Agent Alert", "Agent needs permission: Review tool call!")
+		} else if store.SelectedAgentHWND != 0 && win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
+			_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedAgentHWND))
+			logger.Info("[Test] Switched back to Agent Window: HWND %d", store.SelectedAgentHWND)
+		}
+	}()
 
 	writeJSON(w, map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("Captured HWND %d (\"%s\"). Restoring in 1.5s!", fg, title),
+		"message": "Simulated task flow triggered! Check window focus & notification.",
 	})
-}
-
-func handleSaveAndFocus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	userHWND := win32.GetForegroundWindow()
-	userTitle := win32.GetWindowTitle(userHWND)
-
-	cfg := config.LoadConfig()
-	agentHWND := win32.FindAncestorWindow()
-	if agentHWND == 0 {
-		agentHWND = win32.FindWindowByTitlePattern([]string{"Visual Studio Code", "Antigravity", "Claude", "Terminal"})
-	}
-
-	sess := state.SessionState{
-		SavedHWND:  uintptr(userHWND),
-		SavedTitle: userTitle,
-		AgentHWND:  uintptr(agentHWND),
-		AgentType:  "dashboard",
-		State:      "waiting_user_prompt",
-		UpdatedAt:  time.Now(),
-	}
-	_ = state.SaveSession("dashboard", sess)
-
-	if agentHWND != 0 && agentHWND != userHWND {
-		_ = win32.SetForegroundWindowWithBypass(agentHWND)
-	}
-
-	_ = cfg
-	writeJSON(w, map[string]interface{}{
-		"success":    true,
-		"saved_hwnd": userHWND,
-		"agent_hwnd": agentHWND,
-	})
-}
-
-func handleRestore(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	sess, found, err := state.GetSession("dashboard")
-	if err == nil && found && win32.IsWindowValid(win32.HWND(sess.SavedHWND)) {
-		_ = win32.SetForegroundWindowWithBypass(win32.HWND(sess.SavedHWND))
-	}
-
-	writeJSON(w, map[string]interface{}{"success": true})
 }
 
 func handleInstall(w http.ResponseWriter, r *http.Request) {
@@ -193,50 +276,11 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Return last 20 lines
-	if len(filtered) > 20 {
-		filtered = filtered[len(filtered)-20:]
+	if len(filtered) > 25 {
+		filtered = filtered[len(filtered)-25:]
 	}
 
 	writeJSON(w, filtered)
-}
-
-func handleConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		cfg := config.LoadConfig()
-		writeJSON(w, cfg)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
-	type ConfigReq struct {
-		DebounceMS int      `json:"debounce_ms"`
-		Patterns   []string `json:"patterns"`
-	}
-
-	var req ConfigReq
-	if err := json.Unmarshal(body, &req); err == nil {
-		cfg := config.LoadConfig()
-		if ag, ok := cfg.Agents["antigravity"]; ok {
-			ag.DebounceMS = req.DebounceMS
-			cfg.Agents["antigravity"] = ag
-		}
-		if len(req.Patterns) > 0 {
-			if ag, ok := cfg.Agents["claude-code"]; ok {
-				ag.TitlePatterns = req.Patterns
-				cfg.Agents["claude-code"] = ag
-			}
-		}
-		_ = config.SaveConfig(cfg)
-		logger.Info("[Config] Updated configuration via UI dashboard")
-	}
-
-	writeJSON(w, map[string]interface{}{"success": true})
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {
