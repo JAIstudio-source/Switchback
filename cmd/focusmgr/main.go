@@ -24,7 +24,7 @@ var version = "1.0.0"
 
 func main() {
 	if len(os.Args) < 2 {
-		// Default when double-clicked from Windows Explorer: launch the Minecraft Pixel UI!
+		// Default when double-clicked from Windows Explorer: launch the Pixel UI dashboard!
 		runUI()
 		return
 	}

@@ -1,3 +1,3 @@
 @echo off
-title focusmgr - Minecraft UI Launcher
+title focusmgr - Pixel UI Launcher
 start "" "%~dp0focusmgr.exe" ui

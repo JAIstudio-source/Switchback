@@ -1,8 +1,8 @@
 // ==========================================================================
-// MINECRAFT RETRO PIXEL LOGIC & AUDIO SYNTHESIZER FOR FOCUSMGR
+// RETRO COLOURFUL PIXEL LOGIC & AUDIO SYNTHESIZER FOR FOCUSMGR
 // ==========================================================================
 
-// Sound Synthesizer via Web Audio API (Zero external assets needed!)
+// Sound Synthesizer via Web Audio API (Zero external audio files needed!)
 class PixelAudio {
   constructor() {
     this.ctx = null;
@@ -16,7 +16,7 @@ class PixelAudio {
     }
   }
 
-  // Classic wood/stone click sound
+  // Classic button click sound
   playClick() {
     if (!this.enabled) return;
     this.init();
@@ -37,7 +37,7 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.05);
   }
 
-  // Ender Pearl warp / focus switch sound
+  // Focus switch sound
   playWarp() {
     if (!this.enabled) return;
     this.init();
@@ -78,8 +78,8 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.08);
   }
 
-  // Level Up / Success fanfare
-  playLevelUp() {
+  // Success fanfare
+  playFanfare() {
     if (!this.enabled) return;
     this.init();
     const notes = [440, 554, 659, 880];
@@ -105,35 +105,11 @@ const currentTitleEl = document.getElementById('current-window-title');
 const currentHwndEl = document.getElementById('current-window-hwnd');
 const activeSessionsEl = document.getElementById('active-sessions-count');
 const chatLogsEl = document.getElementById('chat-logs');
-const xpFillEl = document.getElementById('xp-fill');
-const xpLevelEl = document.getElementById('xp-level');
 const countdownBanner = document.getElementById('countdown-banner');
 const countdownText = document.getElementById('countdown-text');
 const countdownSubtext = document.getElementById('countdown-subtext');
 
-let currentLevel = 1;
-let switchCount = 0;
-
-// Initialize HUD (Hearts & Drumsticks)
-function initHUD() {
-  const heartsBar = document.getElementById('hearts-bar');
-  const hungerBar = document.getElementById('hunger-bar');
-
-  heartsBar.innerHTML = '';
-  hungerBar.innerHTML = '';
-
-  for (let i = 0; i < 10; i++) {
-    const heart = document.createElement('div');
-    heart.className = 'pixel-heart';
-    heartsBar.appendChild(heart);
-
-    const drumstick = document.createElement('div');
-    drumstick.className = 'pixel-drumstick';
-    hungerBar.appendChild(drumstick);
-  }
-}
-
-// Append line to Minecraft Chat Box
+// Append line to Chat / Activity Console
 function logChat(sender, message, type = 'info') {
   const line = document.createElement('div');
   line.className = `chat-line ${type}`;
@@ -162,10 +138,6 @@ async function fetchStatus() {
     currentTitleEl.textContent = data.current_title || 'None / Desktop';
     currentHwndEl.textContent = data.current_hwnd || '0';
     activeSessionsEl.textContent = data.active_sessions || '0';
-
-    if (data.active_sessions > 0) {
-      xpLevelEl.textContent = `LVL ${Math.max(1, data.active_sessions * 5 + switchCount)}`;
-    }
   } catch (e) {
     // Local static fallback mode
   }
@@ -196,14 +168,14 @@ async function runTeleportTest() {
   countdownBanner.classList.remove('hidden');
 
   let seconds = 3;
-  countdownText.textContent = `WARPING IN ${seconds}...`;
+  countdownText.textContent = `SWITCHING IN ${seconds}...`;
   countdownSubtext.textContent = `Click into ANY other window (e.g. Browser, Notepad) NOW!`;
   audio.playBeep(440);
 
   const timer = setInterval(async () => {
     seconds--;
     if (seconds > 0) {
-      countdownText.textContent = `WARPING IN ${seconds}...`;
+      countdownText.textContent = `SWITCHING IN ${seconds}...`;
       audio.playBeep(440 + (3 - seconds) * 100);
     } else {
       clearInterval(timer);
@@ -214,11 +186,10 @@ async function runTeleportTest() {
       try {
         const res = await fetch('/api/test-focus', { method: 'POST' });
         const resData = await res.json();
-        logChat('EnderEye', `Focus switch complete: ${resData.message || 'Restored'}`, 'success');
-        switchCount++;
-        audio.playLevelUp();
+        logChat('Focus', `Focus switch complete: ${resData.message || 'Restored'}`, 'success');
+        audio.playFanfare();
       } catch (err) {
-        logChat('EnderEye', `Teleport trigger sent locally.`, 'info');
+        logChat('Focus', `Switch trigger sent locally.`, 'info');
       }
 
       setTimeout(() => {
@@ -249,13 +220,13 @@ function setupEvents() {
     fetchStatus();
   });
 
-  // Test Teleport
+  // Test Focus Switch
   document.getElementById('btn-test-teleport').addEventListener('click', runTeleportTest);
 
   // Manual Save & Focus
   document.getElementById('btn-manual-save').addEventListener('click', async () => {
     audio.playClick();
-    logChat('Player', 'Triggering manual save-and-focus...', 'info');
+    logChat('User', 'Triggering manual save-and-focus...', 'info');
     try {
       await fetch('/api/save-and-focus', { method: 'POST' });
       audio.playWarp();
@@ -269,7 +240,7 @@ function setupEvents() {
   // Manual Restore
   document.getElementById('btn-manual-restore').addEventListener('click', async () => {
     audio.playClick();
-    logChat('Player', 'Triggering manual restore...', 'info');
+    logChat('User', 'Triggering manual restore...', 'info');
     try {
       await fetch('/api/restore', { method: 'POST' });
       audio.playWarp();
@@ -283,14 +254,14 @@ function setupEvents() {
   // Auto-Install All Hooks
   document.getElementById('btn-install-hooks').addEventListener('click', async () => {
     audio.playClick();
-    logChat('Redstone', 'Crafting and writing hooks to Claude Code & Antigravity...', 'warn');
+    logChat('Hook', 'Configuring hooks for Claude Code & Antigravity...', 'warn');
     try {
       const res = await fetch('/api/install', { method: 'POST' });
       const data = await res.json();
-      audio.playLevelUp();
-      logChat('Redstone', data.message || 'All hooks installed successfully!', 'success');
+      audio.playFanfare();
+      logChat('Hook', data.message || 'All hooks installed successfully!', 'success');
     } catch (e) {
-      logChat('Redstone', 'Hooks configuration updated.', 'success');
+      logChat('Hook', 'Hooks configuration updated.', 'success');
     }
   });
 
@@ -311,14 +282,14 @@ function setupEvents() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ debounce_ms: debounce, patterns: patterns })
       });
-      audio.playLevelUp();
-      logChat('Crafting', 'Configuration saved to %LOCALAPPDATA%\\focusmgr\\config.json', 'success');
+      audio.playFanfare();
+      logChat('Config', 'Configuration saved to %LOCALAPPDATA%\\focusmgr\\config.json', 'success');
     } catch (e) {
-      logChat('Crafting', 'Settings applied locally.', 'info');
+      logChat('Config', 'Settings applied locally.', 'info');
     }
   });
 
-  // Chat Clear
+  // Console Clear
   document.getElementById('btn-clear-logs').addEventListener('click', () => {
     audio.playClick();
     chatLogsEl.innerHTML = '';
@@ -333,7 +304,6 @@ function setupEvents() {
 
 // Initial Boot
 document.addEventListener('DOMContentLoaded', () => {
-  initHUD();
   setupEvents();
   fetchStatus();
   fetchLogs();

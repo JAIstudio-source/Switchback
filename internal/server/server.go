@@ -48,7 +48,7 @@ func StartServer(port int, embeddedFS fs.FS) error {
 	url := fmt.Sprintf("http://%s", addr)
 
 	fmt.Println("=======================================================")
-	fmt.Printf(" [MINECRAFT EDITION] focusmgr UI running at: %s\n", url)
+	fmt.Printf(" [PIXEL UI] focusmgr dashboard running at: %s\n", url)
 	fmt.Println(" Opening dashboard in your default browser...")
 	fmt.Println(" Press Ctrl+C in this terminal window to stop.")
 	fmt.Println("=======================================================")
