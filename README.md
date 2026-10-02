@@ -114,3 +114,9 @@ switchback uninstall
 ## 📄 License
 
 Distributed under the **MIT License**. Free and open-source for personal and commercial use.
+
+---
+
+## 🔏 Code Signing
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
