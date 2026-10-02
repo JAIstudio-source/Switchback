@@ -45,6 +45,10 @@ if (Test-Path $SourceExe) {
     Invoke-WebRequest -Uri $downloadUrl -OutFile (Join-Path $InstallDir "switchback.exe") -UseBasicParsing
 }
 
+if (Test-Path (Join-Path $ScriptDir "icon.ico")) {
+    Copy-Item -Path (Join-Path $ScriptDir "icon.ico") -Destination (Join-Path $InstallDir "icon.ico") -Force
+}
+
 if (Test-Path $SourceIcon) {
     Copy-Item -Path $SourceIcon -Destination (Join-Path $InstallDir "icon.png") -Force
 }
@@ -86,6 +90,7 @@ Set-Content -Path $UninstallScript -Value $UninstallScriptContent -Force
 # 5. Create Desktop and Start Menu Shortcuts
 Write-Host "[*] Creating Desktop and Start Menu shortcuts..." -ForegroundColor Cyan
 $WshShell = New-Object -ComObject WScript.Shell
+$IcoPath = Join-Path $InstallDir "icon.ico"
 
 # Desktop Shortcut
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -94,20 +99,20 @@ $DesktopShortcut.TargetPath = (Join-Path $InstallDir "switchback.exe")
 $DesktopShortcut.Arguments = "ui"
 $DesktopShortcut.WorkingDirectory = $InstallDir
 $DesktopShortcut.Description = "SwitchBack - AI Agent Focus & Mobile Remote"
-if (Test-Path (Join-Path $InstallDir "icon.png")) {
-    $DesktopShortcut.IconLocation = (Join-Path $InstallDir "icon.png")
+if (Test-Path $IcoPath) {
+    $DesktopShortcut.IconLocation = "$IcoPath,0"
 }
 $DesktopShortcut.Save()
 
-# Start Menu Shortcut
+# Start Menu Shortcut (Indexed by Windows Search)
 $StartMenuPath = [Environment]::GetFolderPath("Programs")
 $StartShortcut = $WshShell.CreateShortcut((Join-Path $StartMenuPath "SwitchBack.lnk"))
 $StartShortcut.TargetPath = (Join-Path $InstallDir "switchback.exe")
 $StartShortcut.Arguments = "ui"
 $StartShortcut.WorkingDirectory = $InstallDir
 $StartShortcut.Description = "SwitchBack - AI Agent Focus & Mobile Remote"
-if (Test-Path (Join-Path $InstallDir "icon.png")) {
-    $StartShortcut.IconLocation = (Join-Path $InstallDir "icon.png")
+if (Test-Path $IcoPath) {
+    $StartShortcut.IconLocation = "$IcoPath,0"
 }
 $StartShortcut.Save()
 
@@ -132,12 +137,23 @@ Set-ItemProperty -Path $UninstallRegKey -Name "DisplayVersion" -Value $AppVersio
 Set-ItemProperty -Path $UninstallRegKey -Name "Publisher" -Value $Publisher
 Set-ItemProperty -Path $UninstallRegKey -Name "InstallLocation" -Value $InstallDir
 Set-ItemProperty -Path $UninstallRegKey -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$UninstallScript`""
-Set-ItemProperty -Path $UninstallRegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir "switchback.exe")
+Set-ItemProperty -Path $UninstallRegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir "icon.ico")
 Set-ItemProperty -Path $UninstallRegKey -Name "HelpLink" -Value $RepoUrl
 Set-ItemProperty -Path $UninstallRegKey -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $UninstallRegKey -Name "NoRepair" -Value 1 -Type DWord
 
-# 8. Configure AI Agent Hooks
+# 8. Refresh Windows Shell & Icon Cache
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class ShellHelper {
+    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+}
+"@
+[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
+
+# 9. Configure AI Agent Hooks
 Write-Host "[*] Configuring agent hooks for Antigravity IDE and Claude Code..." -ForegroundColor Cyan
 & (Join-Path $InstallDir "switchback.exe") install | Out-Null
 

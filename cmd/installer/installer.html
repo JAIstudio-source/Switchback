@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwitchBack Setup</title>
+  <style>
+    :root {
+      --bg-dark: #0f111a;
+      --card-bg: #1a1c29;
+      --card-border: #2d3148;
+      --accent-gold: #f9ca24;
+      --accent-cyan: #00d2d3;
+      --accent-emerald: #10ac84;
+      --text-main: #f5f6fa;
+      --text-muted: #8890a6;
+      --font-pixel: 'Courier New', Courier, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-pixel);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      overflow: hidden;
+    }
+
+    .installer-card {
+      background: var(--card-bg);
+      border: 3px solid var(--card-border);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.05);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 480px;
+      padding: 28px;
+      text-align: center;
+      position: relative;
+    }
+
+    .header-logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .logo-img {
+      width: 48px;
+      height: 48px;
+      image-rendering: pixelated;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: var(--accent-gold);
+      text-transform: uppercase;
+      text-shadow: 2px 2px 0px #000;
+    }
+
+    .tagline {
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+      text-transform: uppercase;
+    }
+
+    .feature-list {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 14px;
+      text-align: left;
+      margin-bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: #dcdde1;
+    }
+
+    .feature-icon {
+      font-size: 16px;
+    }
+
+    .install-path-box {
+      font-size: 10px;
+      color: var(--text-muted);
+      background: rgba(0,0,0,0.2);
+      padding: 8px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      word-break: break-all;
+    }
+
+    .btn-install {
+      background: var(--accent-gold);
+      color: #111;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 800;
+      padding: 14px 28px;
+      border: 2px solid #000;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 0 #000;
+      transition: all 0.1s ease;
+      text-transform: uppercase;
+    }
+
+    .btn-install:hover {
+      background: #fed330;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 0 #000;
+    }
+
+    .btn-install:active {
+      transform: translateY(2px);
+      box-shadow: 0 2px 0 #000;
+    }
+
+    .btn-install:disabled {
+      background: #4b6584;
+      color: #888;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .progress-container {
+      display: none;
+      margin-top: 10px;
+      text-align: left;
+    }
+
+    .progress-bar-bg {
+      background: #2f3640;
+      border: 1px solid #485460;
+      border-radius: 4px;
+      height: 18px;
+      overflow: hidden;
+      margin-bottom: 8px;
+      position: relative;
+    }
+
+    .progress-bar-fill {
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald));
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .progress-status {
+      font-size: 11px;
+      color: var(--accent-cyan);
+    }
+
+    .success-panel {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .success-badge {
+      background: rgba(16, 172, 132, 0.2);
+      border: 1px solid var(--accent-emerald);
+      color: var(--accent-emerald);
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+      width: 100%;
+    }
+
+    .btn-launch {
+      background: var(--accent-emerald);
+      color: #fff;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 800;
+      padding: 14px 28px;
+      border: 2px solid #000;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 0 #000;
+      text-transform: uppercase;
+    }
+
+    .btn-launch:hover {
+      background: #1dd1a1;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 0 #000;
+    }
+
+    .footer {
+      margin-top: 16px;
+      font-size: 9px;
+      color: #576574;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="installer-card">
+    <div class="header-logo">
+      <img src="icon.png" class="logo-img" alt="SwitchBack Logo">
+      <div>
+        <h1>SwitchBack</h1>
+        <div class="tagline">Setup &amp; Environment Installer &bull; v1.1.0</div>
+      </div>
+    </div>
+
+    <!-- Initial Setup Info Screen -->
+    <div id="setup-screen">
+      <div class="feature-list">
+        <div class="feature-item">
+          <span class="feature-icon">🔄</span>
+          <span><b>Auto Focus Switcher</b> &bull; VLC, YouTube, Spotify &amp; Gaming</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">📱</span>
+          <span><b>Mobile Remote Controller</b> &bull; Control PC agent from phone</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">🤖</span>
+          <span><b>Universal Hooks</b> &bull; Antigravity, Claude, Cursor &amp; Windsurf</span>
+        </div>
+        <div class="feature-item">
+          <span class="feature-icon">⚡</span>
+          <span><b>Desktop &amp; Start Menu Shortcuts</b> with custom icon</span>
+        </div>
+      </div>
+
+      <div class="install-path-box">
+        Destination: <span id="dest-path">%LOCALAPPDATA%\SwitchBack</span>
+      </div>
+
+      <button id="btn-start-install" class="btn-install">🚀 Install SwitchBack Now</button>
+    </div>
+
+    <!-- Progress Screen -->
+    <div id="progress-screen" class="progress-container">
+      <div class="progress-bar-bg">
+        <div id="progress-bar" class="progress-bar-fill"></div>
+      </div>
+      <div id="progress-text" class="progress-status">Preparing installation...</div>
+    </div>
+
+    <!-- Success Screen -->
+    <div id="success-screen" class="success-panel">
+      <div class="success-badge">
+        ✔ SwitchBack Successfully Installed!
+      </div>
+      <div style="font-size:11px;color:#c8d6e5;text-align:left;width:100%;line-height:1.6;">
+        &bull; <b>Desktop Shortcut</b> created with official icon.<br>
+        &bull; <b>Start Menu</b> registered (indexed in Windows Search).<br>
+        &bull; <b>Global Command</b> <code>switchback</code> enabled in PATH.<br>
+        &bull; <b>Agent Hooks</b> configured for Antigravity &amp; Claude.
+      </div>
+      <button id="btn-launch-app" class="btn-launch">🎮 Launch SwitchBack</button>
+    </div>
+
+    <div class="footer">JAIstudio &bull; MIT Open Source License</div>
+  </div>
+
+  <script>
+    const btnInstall = document.getElementById('btn-start-install');
+    const setupScreen = document.getElementById('setup-screen');
+    const progressScreen = document.getElementById('progress-screen');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const successScreen = document.getElementById('success-screen');
+    const btnLaunch = document.getElementById('btn-launch-app');
+
+    btnInstall.addEventListener('click', async () => {
+      btnInstall.disabled = true;
+      setupScreen.style.display = 'none';
+      progressScreen.style.display = 'block';
+
+      const steps = [
+        { pct: 20, text: 'Creating installation directories...' },
+        { pct: 45, text: 'Deploying SwitchBack binaries & pixel assets...' },
+        { pct: 70, text: 'Generating Desktop and Start Menu shortcuts...' },
+        { pct: 85, text: 'Updating user PATH & Windows Search index...' },
+        { pct: 95, text: 'Configuring Antigravity & Claude agent hooks...' }
+      ];
+
+      for (let i = 0; i < steps.length; i++) {
+        progressBar.style.width = steps[i].pct + '%';
+        progressText.textContent = steps[i].text;
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      try {
+        const res = await fetch('/api/install', { method: 'POST' });
+        const data = await res.json();
+
+        progressBar.style.width = '100%';
+        progressText.textContent = 'Finalizing installation...';
+        await new Promise(r => setTimeout(r, 400));
+
+        progressScreen.style.display = 'none';
+        successScreen.style.display = 'flex';
+      } catch (e) {
+        progressText.textContent = 'Error: ' + e.message;
+      }
+    });
+
+    btnLaunch.addEventListener('click', async () => {
+      btnLaunch.disabled = true;
+      btnLaunch.textContent = 'Launching...';
+      try {
+        await fetch('/api/launch', { method: 'POST' });
+        setTimeout(() => {
+          window.close();
+        }, 800);
+      } catch (e) {
+        window.close();
+      }
+    });
+  </script>
+</body>
+</html>
