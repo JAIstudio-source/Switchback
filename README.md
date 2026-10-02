@@ -1,96 +1,116 @@
-# switchback - Auto-Focus Window Manager for AI Agents
+<div align="center">
 
-`switchback` is a lightweight, sub-50ms Windows window management CLI and GUI dashboard designed specifically to automate the **"Focus Loop"** for AI coding agents such as **Claude Code**, **OpenAI Codex**, and **Antigravity**.
+# ⚡ SwitchBack
+### Autonomous Focus Switcher, Media Controller & Mobile Remote for AI Coding Agents
 
----
+[![Release](https://img.shields.io/github/v/release/JAIstudio-source/Switchback?color=blue&style=flat-square)](https://github.com/JAIstudio-source/Switchback/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d7.svg?style=flat-square)](https://github.com/JAIstudio-source/Switchback)
+[![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)](LICENSE)
+[![Go Report](https://img.shields.io/badge/go-1.24-00ADD8.svg?style=flat-square)](https://golang.org)
 
-## ⚡ The Focus Loop Workflow
+**Watch videos, browse, or game while your AI coding agent works.**  
+SwitchBack automatically switches windows and pauses media when your agent needs input, and lets you control everything from your phone over local Wi-Fi.
 
-```
-       ┌────────────────────────────────────────────────────────┐
-       │                  User Working Context                  │
-       │            (Browser / Slack / Editor / etc.)           │
-       └───────────────────────────┬────────────────────────────┘
-                                   │
-                Agent Task Completes (`Stop` Hook)
-                  1. Save current foreground HWND
-                  2. Bring Agent window to front
-                                   │
-                                   ▼
-       ┌────────────────────────────────────────────────────────┐
-       │                   AI Agent Window                      │
-       │       (Terminal / VS Code / Antigravity Session)       │
-       └───────────────────────────┬────────────────────────────┘
-                                   │
-              User Prompts Agent (`UserPromptSubmit` Hook)
-                  1. Validate saved user HWND
-                  2. Restore user's previous window
-                                   │
-                                   ▼
-       ┌────────────────────────────────────────────────────────┐
-       │              Context Restored Seamlessly!              │
-       │          (Resume previous task with zero friction)     │
-       └────────────────────────────────────────────────────────┘
-```
+[📥 Download Latest Setup.exe](https://github.com/JAIstudio-source/Switchback/releases/latest) • [📱 Mobile Remote Guide](#-mobile-remote-controller) • [🤖 Supported Agents](#-supported-ai-agents)
 
 ---
 
-## 🚀 Key Features
+</div>
 
-* **Sub-50ms Hook Latency:** Starts and executes window switches almost instantaneously without lagging or stalling agent sessions.
-* **Fail-Safe Operation:** Always exits with code `0`. Any failure is recorded in `%LOCALAPPDATA%\switchback\switchback.log` without interfering with agent execution.
-* **Windows Focus-Stealing Bypass:** Utilizes `AttachThreadInput`, temporary foreground lock timeout override (`SPI_SETFOREGROUNDLOCKTIMEOUT`), and simulated `VK_MENU` pulse to reliably bypass Windows 10/11 foreground restrictions.
-* **Parent Process Auto-Detection:** Automatically inspects ancestor process trees to find the terminal emulator or IDE window hosting the agent.
-* **Safe Concurrent Multi-Session Tracking:** State is stored atomically in `%LOCALAPPDATA%\switchback\state.json`.
+## 💡 What is SwitchBack?
+
+When working with autonomous AI coding agents (**Antigravity**, **Claude Code**, **Cursor**, **Windsurf**), you often wait 1 to 5 minutes while the agent analyzes files, writes code, and runs tests. 
+
+Instead of staring at a terminal, **SwitchBack lets you switch to YouTube, VLC, or a game**:
+
+1. **You submit a prompt** ➔ SwitchBack automatically switches to your video/game and **resumes playback**.
+2. **Agent works in background** ➔ You enjoy your movie or game undisturbed.
+3. **Agent finishes or asks a question** ➔ SwitchBack automatically **pauses your media** and brings the agent window back to your screen.
 
 ---
 
-## 🛠️ Commands
+## 📱 Mobile Remote Controller
+
+Control your PC's AI agent from your couch, kitchen, or phone over local Wi-Fi:
+
+* **🚀 Send Prompts**: Type instructions or tap quick prompt chips from your phone.
+* **✔ 1-Tap Approvals**: When your agent asks `[y/n]` or multiple-choice questions, interactive buttons pop up on your phone.
+* **⚡ Live Output Stream**: See real-time progress and command output directly on your phone screen.
+* **⏯️ PC Media Toggle**: Play/pause your PC's media (YouTube, Spotify, VLC) from your phone.
+
+> **Access URL**: Simply open `http://<YOUR-PC-IP>:48123/mobile.html` on your mobile browser (displayed in the desktop launcher).
+
+---
+
+## 🤖 Supported AI Agents
+
+| Agent / IDE | Focus Switch | Media Pause/Resume | Mobile Prompts & Approvals |
+| :--- | :---: | :---: | :---: |
+| **Google Antigravity IDE** | ✅ | ✅ | ⚡ Native Language Server IPC |
+| **Anthropic Claude Code** | ✅ | ✅ | ⌨️ CLI Terminal & Headless |
+| **Cursor** | ✅ | ✅ | ⌨️ Auto Composer / Chat Input |
+| **Windsurf (Codeium)** | ✅ | ✅ | ⌨️ Cascade Chat Input |
+| **VS Code (Cline / Roo / Copilot)** | ✅ | ✅ | ⌨️ Chat View Automation |
+| **Aider / Goose / OpenHands** | ✅ | ✅ | ⌨️ CLI Stdin & `[y/n]` Choices |
+| **JetBrains (IntelliJ, PyCharm)** | ✅ | ✅ | ⌨️ Window Focus & Notifications |
+
+---
+
+## 🛡️ Smart Interruption Guards
+
+* 🎮 **Gaming & Fullscreen Guard**: If you are playing a game or watching a fullscreen video, SwitchBack **suppresses window switching** and sends a subtle notification toast instead.
+* 📞 **Meeting Guard**: Protects active **Zoom, Google Meet, Microsoft Teams, Discord, and Slack Huddles** from being interrupted by window focus changes.
+* 📱 **Mobile Primary Mode**: Keep working on your PC without window switching while managing the agent exclusively from your phone.
+
+---
+
+## 🚀 Quick Start (Installation)
+
+### Option 1: Standalone Setup Installer (Recommended)
+1. Download **[`Setup.exe`](https://github.com/JAIstudio-source/Switchback/releases/latest/download/Setup.exe)** from the latest release.
+2. Run `Setup.exe` — it installs SwitchBack to your system, creates Start Menu & Desktop shortcuts, and sets up agent hooks automatically.
+
+### Option 2: Portable Zip
+1. Download **`SwitchBack-Windows-x64.zip`**.
+2. Extract anywhere and double-click **`Launch UI.bat`** (or run `Install.bat`).
+
+---
+
+## 🖥️ Using the Pixel Dashboard
+
+Double-click the **SwitchBack** desktop shortcut or run `switchback ui` in any terminal:
+
+1. **Select Agent**: Pick your active AI agent window (Antigravity, Claude, Cursor, etc.).
+2. **Select Work / Media**: Pick your video player, browser, or game.
+3. **Toggle Modes**: Enable Media Control, Fullscreen Guard, or Gaming Mode.
+4. **Scan QR / Mobile Link**: Open the mobile remote on your phone.
+
+---
+
+## ⌨️ CLI Commands
+
+For terminal power-users:
 
 ```powershell
-# Launch the Pixel UI dashboard in browser
+# Launch the Web & Mobile Dashboard
 switchback ui
 
-# Save foreground window and switch focus to agent
-switchback save-and-focus --session <session-id> [--agent claude-code|codex|antigravity]
-
-# Restore focus to previous window when user prompts agent
-switchback restore --session <session-id> [--agent claude-code|codex|antigravity]
-
-# Check active window, tracked sessions, and paths
+# Show status, detected windows & active sessions
 switchback status
 
-# Automatically configure hooks in installed agents
+# Install hooks into Antigravity and Claude Code
 switchback install
 
-# Interactive focus switch test
-switchback test-focus
+# Pause or resume auto-switching
+switchback stop
+switchback resume
+
+# Remove hooks and restore default behavior
+switchback uninstall
 ```
 
 ---
 
-## ⚙️ Configuration (`%LOCALAPPDATA%\switchback\config.json`)
+## 📄 License
 
-```json
-{
-  "log_to_file": true,
-  "log_level": "info",
-  "agents": {
-    "claude-code": {
-      "title_patterns": ["Claude", "Windows Terminal", "Visual Studio Code"],
-      "auto_detect_parent": true,
-      "debounce_ms": 0
-    },
-    "codex": {
-      "title_patterns": ["Codex", "Windows Terminal"],
-      "auto_detect_parent": true,
-      "debounce_ms": 0
-    },
-    "antigravity": {
-      "title_patterns": ["Antigravity", "Visual Studio Code"],
-      "auto_detect_parent": true,
-      "debounce_ms": 2000
-    }
-  }
-}
-```
+Distributed under the **MIT License**. Free and open-source for personal and commercial use.
