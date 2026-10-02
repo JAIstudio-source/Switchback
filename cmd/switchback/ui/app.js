@@ -1,5 +1,5 @@
 // ==========================================================================
-// SWITCHBACK v1.1.0 - MODULAR CLEAN CONTROLLER
+// SWITCHBACK v1.2.0 - MODULAR CLEAN CONTROLLER
 // ==========================================================================
 
 class PixelAudio {
@@ -669,6 +669,44 @@ function setupEvents() {
       } catch (e) {}
     });
   }
+
+  // Exit / End App Button
+  const btnExitApp = document.getElementById('btn-exit-app');
+  if (btnExitApp) {
+    btnExitApp.addEventListener('click', async () => {
+      audio.playClick();
+      if (confirm('Stop SwitchBack completely? The background process will terminate.')) {
+        logChat('System', 'Shutting down SwitchBack process...', 'warn');
+        try {
+          await fetch('/api/shutdown', { method: 'POST' });
+        } catch (e) {}
+        document.body.innerHTML = `
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0f111a;color:#fff;font-family:'Press Start 2P', monospace;text-align:center;padding:24px;">
+            <div style="font-size:40px;margin-bottom:20px;">⏹</div>
+            <h1 style="font-size:16px;color:#f9ca24;margin-bottom:14px;letter-spacing:1px;">SWITCHBACK STOPPED</h1>
+            <p style="font-size:11px;color:#8890a6;line-height:1.6;font-family:sans-serif;">The background process has exited cleanly.<br>You can now safely close this browser window.</p>
+          </div>
+        `;
+        setTimeout(() => {
+          window.close();
+        }, 800);
+      }
+    });
+  }
+
+  // Client Session Heartbeat & Auto-disconnect on window close
+  const clientId = 'tab_' + Math.random().toString(36).substr(2, 9);
+  function sendHeartbeat() {
+    fetch('/api/heartbeat?client=' + clientId, { method: 'POST' }).catch(() => {});
+  }
+  sendHeartbeat();
+  setInterval(sendHeartbeat, 3000);
+
+  window.addEventListener('beforeunload', () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/disconnect?client=' + clientId);
+    }
+  });
 
   setupPresets();
   fetchMobileInfo();

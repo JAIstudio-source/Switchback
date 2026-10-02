@@ -6,9 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"switchback/internal/installer"
@@ -22,7 +25,7 @@ import (
 //go:embed ui/*
 var embeddedUI embed.FS
 
-var version = "1.1.0"
+var version = "1.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -57,6 +60,8 @@ func main() {
 		handleStop()
 	case "resume", "enable", "start":
 		handleResume()
+	case "exit", "kill", "quit", "shutdown", "stop-app":
+		handleKillRunning()
 	case "test-focus":
 		handleTestFocus()
 	case "test-switch-work":
@@ -78,6 +83,19 @@ func main() {
 	default:
 		printUsage()
 	}
+}
+
+func handleKillRunning() {
+	client := &http.Client{Timeout: 600 * time.Millisecond}
+	_, _ = client.Post("http://127.0.0.1:48123/api/shutdown", "application/json", nil)
+	time.Sleep(300 * time.Millisecond)
+
+	currentPid := os.Getpid()
+	killScript := fmt.Sprintf(`Get-Process -Name "switchback" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne %d } | Stop-Process -Force -ErrorAction SilentlyContinue`, currentPid)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", killScript)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = cmd.Run()
+	fmt.Println("[OK] All SwitchBack processes stopped.")
 }
 
 func runUI() {

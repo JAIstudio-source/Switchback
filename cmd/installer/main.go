@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -24,12 +25,19 @@ var iconPNGBytes []byte
 //go:embed icon.ico
 var iconICOBytes []byte
 
+//go:embed README.md
+var readmeBytes []byte
+
 const (
 	AppName    = "SwitchBack"
-	AppVersion = "1.1.0"
+	AppVersion = "1.2.0"
 	Publisher  = "JAIstudio"
 	RepoURL    = "https://github.com/JAIstudio-source/Switchback"
 )
+
+type InstallPayload struct {
+	InstallPath string `json:"installPath"`
+}
 
 func main() {
 	// 1. Setup local HTTP server on random available port
@@ -53,8 +61,16 @@ func main() {
 		w.Write(iconPNGBytes)
 	})
 
+	mux.HandleFunc("/icon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.Write(iconICOBytes)
+	})
+
+	mux.HandleFunc("/api/default-path", handleDefaultPathRequest)
+	mux.HandleFunc("/api/browse", handleBrowseRequest)
 	mux.HandleFunc("/api/install", handleInstallRequest)
 	mux.HandleFunc("/api/launch", handleLaunchRequest)
+	mux.HandleFunc("/api/close", handleCloseRequest)
 
 	server := &http.Server{Handler: mux}
 
@@ -72,15 +88,24 @@ func main() {
 	select {}
 }
 
+func getDefaultInstallDir() string {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		home, _ := os.UserHomeDir()
+		localAppData = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(localAppData, AppName)
+}
+
 func openAppWindow(url string) {
-	// Try Edge App Mode (default on all Windows 10/11)
+	// Try Edge App Mode (default on Windows 10/11)
 	edgePaths := []string{
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 	}
 	for _, p := range edgePaths {
 		if _, err := os.Stat(p); err == nil {
-			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=520,640", "--disable-features=Translate")
+			cmd := exec.Command(p, fmt.Sprintf("--app=%s", url), "--window-size=540,680", "--disable-features=Translate")
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 			if err := cmd.Start(); err == nil {
 				return
@@ -91,7 +116,7 @@ func openAppWindow(url string) {
 	// Try Chrome App Mode
 	chromePath := `C:\Program Files\Google\Chrome\Application\chrome.exe`
 	if _, err := os.Stat(chromePath); err == nil {
-		cmd := exec.Command(chromePath, fmt.Sprintf("--app=%s", url), "--window-size=520,640")
+		cmd := exec.Command(chromePath, fmt.Sprintf("--app=%s", url), "--window-size=540,680")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		if err := cmd.Start(); err == nil {
 			return
@@ -104,18 +129,54 @@ func openAppWindow(url string) {
 	_ = cmd.Start()
 }
 
+func handleDefaultPathRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"path": getDefaultInstallDir(),
+	})
+}
+
+func handleBrowseRequest(w http.ResponseWriter, r *http.Request) {
+	// Call Windows Folder Browser Dialog via PowerShell STA
+	psScript := "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select SwitchBack Installation Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
+	cmd := exec.Command("powershell", "-NoProfile", "-Sta", "-Command", psScript)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	_ = cmd.Run()
+
+	selectedPath := strings.TrimSpace(out.String())
+	if selectedPath != "" {
+		// If user selected a directory not ending with SwitchBack, append SwitchBack for convenience
+		if !strings.EqualFold(filepath.Base(selectedPath), AppName) {
+			selectedPath = filepath.Join(selectedPath, AppName)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"path": selectedPath,
+	})
+}
+
+var lastInstallDir string
+
 func handleInstallRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
-		home, _ := os.UserHomeDir()
-		localAppData = filepath.Join(home, "AppData", "Local")
+	var payload InstallPayload
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	installDir := strings.TrimSpace(payload.InstallPath)
+	if installDir == "" {
+		installDir = getDefaultInstallDir()
 	}
-	installDir := filepath.Join(localAppData, AppName)
+	installDir, _ = filepath.Abs(installDir)
+	lastInstallDir = installDir
+
 	_ = os.MkdirAll(installDir, 0755)
 
 	// Stop running instance if any
@@ -155,14 +216,68 @@ func handleInstallRequest(w http.ResponseWriter, r *http.Request) {
 		_ = os.WriteFile(targetPNG, iconPNGBytes, 0644)
 	}
 
+	// Save README.md guide
+	targetReadme := filepath.Join(installDir, "README.md")
+	if len(readmeBytes) > 0 {
+		_ = os.WriteFile(targetReadme, readmeBytes, 0644)
+	}
+
 	// Save Launch UI.bat
 	targetBat := filepath.Join(installDir, "Launch UI.bat")
-	_ = os.WriteFile(targetBat, []byte("@echo off\r\ntitle SwitchBack - Pixel UI Launcher\r\nstart \"\" \"%~dp0switchback.exe\" ui\r\n"), 0644)
+	_ = os.WriteFile(targetBat, []byte("@echo off\r\ntitle SwitchBack - Launcher\r\nstart \"\" \"%~dp0switchback.exe\" ui\r\n"), 0644)
+
+	// Save uninstaller script and uninstaller batch file
+	uninstallPs1 := fmt.Sprintf(`$ErrorActionPreference = "SilentlyContinue"
+Write-Host "Uninstalling SwitchBack..." -ForegroundColor Yellow
+$InstallDir = "%s"
+
+# Stop running process
+Get-Process -Name "switchback" | Stop-Process -Force
+
+# Disconnect hooks
+if (Test-Path "$InstallDir\switchback.exe") {
+    & "$InstallDir\switchback.exe" uninstall
+}
+
+# Remove shortcuts
+Remove-Item "$([Environment]::GetFolderPath('Desktop'))\SwitchBack.lnk" -Force
+Remove-Item "$([Environment]::GetFolderPath('Programs'))\SwitchBack.lnk" -Force
+Remove-Item "$([Environment]::GetFolderPath('Programs'))\Uninstall SwitchBack.lnk" -Force
+
+# Remove PATH
+$UserPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
+if ($UserPath -like "*$InstallDir*") {
+    $NewPath = ($UserPath.Split(';') | Where-Object { $_ -ne "$InstallDir" -and $_ -ne "" }) -join ';'
+    [Environment]::SetEnvironmentVariable("PATH", $NewPath, [EnvironmentVariableTarget]::User)
+}
+
+# Remove Registry
+Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack" -Recurse -Force
+
+# Schedule folder cleanup
+Start-Process -FilePath "cmd.exe" -ArgumentList ("/c timeout /t 1 /nobreak >nul & rd /s /q """ + $InstallDir + """") -WindowStyle Hidden
+
+# Refresh Shell
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class ShellHelper {
+    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+}
+"@
+[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
+Write-Host "SwitchBack has been completely uninstalled." -ForegroundColor Green
+`, strings.ReplaceAll(installDir, `\`, `\\`))
+
+	_ = os.WriteFile(filepath.Join(installDir, "uninstall.ps1"), []byte(uninstallPs1), 0644)
+	_ = os.WriteFile(filepath.Join(installDir, "Uninstall.bat"), []byte("@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0uninstall.ps1\"\r\npause\r\n"), 0644)
 
 	// Run PowerShell script for shortcuts with real icon.ico and Shell Refresh
 	psScript := fmt.Sprintf(`
 $InstallDir = "%s"
 $WshShell = New-Object -ComObject WScript.Shell
+$IcoPath = Join-Path $InstallDir "icon.ico"
 
 # 1. Desktop Shortcut
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -171,38 +286,49 @@ $Shortcut.TargetPath = (Join-Path $InstallDir "switchback.exe")
 $Shortcut.Arguments = "ui"
 $Shortcut.WorkingDirectory = $InstallDir
 $Shortcut.Description = "SwitchBack - AI Agent Focus & Mobile Remote"
-$Shortcut.IconLocation = "$InstallDir\icon.ico,0"
+if (Test-Path $IcoPath) { $Shortcut.IconLocation = "$IcoPath,0" }
 $Shortcut.Save()
 
-# 2. Start Menu Shortcut (Registered and Indexed in Windows Search)
+# 2. Start Menu Shortcut (Indexed in Windows Search)
 $StartMenuPath = [Environment]::GetFolderPath("Programs")
 $StartShortcut = $WshShell.CreateShortcut((Join-Path $StartMenuPath "SwitchBack.lnk"))
 $StartShortcut.TargetPath = (Join-Path $InstallDir "switchback.exe")
 $StartShortcut.Arguments = "ui"
 $StartShortcut.WorkingDirectory = $InstallDir
 $StartShortcut.Description = "SwitchBack - AI Agent Focus & Mobile Remote"
-$StartShortcut.IconLocation = "$InstallDir\icon.ico,0"
+if (Test-Path $IcoPath) { $StartShortcut.IconLocation = "$IcoPath,0" }
 $StartShortcut.Save()
 
-# 3. Add to User PATH
+# 3. Start Menu Uninstall Shortcut
+$StartUninstallShortcut = $WshShell.CreateShortcut((Join-Path $StartMenuPath "Uninstall SwitchBack.lnk"))
+$StartUninstallShortcut.TargetPath = (Join-Path $InstallDir "Uninstall.bat")
+$StartUninstallShortcut.WorkingDirectory = $InstallDir
+$StartUninstallShortcut.Description = "Uninstall SwitchBack"
+if (Test-Path $IcoPath) { $StartUninstallShortcut.IconLocation = "$IcoPath,0" }
+$StartUninstallShortcut.Save()
+
+# 4. Add to User PATH
 $CurrentPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
 if ($CurrentPath -notlike "*$InstallDir*") {
     $NewPath = if ($CurrentPath) { "$CurrentPath;$InstallDir" } else { $InstallDir }
     [Environment]::SetEnvironmentVariable("PATH", $NewPath, [EnvironmentVariableTarget]::User)
 }
 
-# 4. Register Uninstaller in Windows Registry
+# 5. Register in Windows Add/Remove Programs
 $RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack"
 if (-not (Test-Path $RegKey)) { New-Item -Path $RegKey -Force | Out-Null }
+$UninstallExe = Join-Path $InstallDir "Uninstall.bat"
 Set-ItemProperty -Path $RegKey -Name "DisplayName" -Value "SwitchBack"
 Set-ItemProperty -Path $RegKey -Name "DisplayVersion" -Value "%s"
 Set-ItemProperty -Path $RegKey -Name "Publisher" -Value "%s"
 Set-ItemProperty -Path $RegKey -Name "InstallLocation" -Value $InstallDir
-Set-ItemProperty -Path $RegKey -Name "UninstallString" -Value "powershell.exe -NoProfile -Command \"& '$InstallDir\switchback.exe' uninstall; Remove-Item '$([Environment]::GetFolderPath('Desktop'))\SwitchBack.lnk' -Force; Remove-Item '$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SwitchBack.lnk' -Force; Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack' -Recurse -Force; Write-Host 'Uninstalled.'\""
+Set-ItemProperty -Path $RegKey -Name 'UninstallString' -Value ('"' + $UninstallExe + '"')
 Set-ItemProperty -Path $RegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir "icon.ico")
 Set-ItemProperty -Path $RegKey -Name "HelpLink" -Value "%s"
+Set-ItemProperty -Path $RegKey -Name "NoModify" -Value 1 -Type DWord
+Set-ItemProperty -Path $RegKey -Name "NoRepair" -Value 1 -Type DWord
 
-# 5. Flush Windows Shell Icon Cache & Windows Search Notification
+# 6. Flush Windows Shell Icon Cache & Windows Search Notification
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -231,8 +357,11 @@ public class ShellHelper {
 }
 
 func handleLaunchRequest(w http.ResponseWriter, r *http.Request) {
-	localAppData := os.Getenv("LOCALAPPDATA")
-	targetExe := filepath.Join(localAppData, AppName, "switchback.exe")
+	installDir := lastInstallDir
+	if installDir == "" {
+		installDir = getDefaultInstallDir()
+	}
+	targetExe := filepath.Join(installDir, "switchback.exe")
 
 	cmd := exec.Command(targetExe, "ui")
 	_ = cmd.Start()
@@ -242,6 +371,16 @@ func handleLaunchRequest(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	}()
+}
+
+func handleCloseRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
 		os.Exit(0)
 	}()
 }

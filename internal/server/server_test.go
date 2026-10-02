@@ -101,3 +101,25 @@ func TestMobilePromptEndpointValidation(t *testing.T) {
 		t.Errorf("Expected LastMobilePrompt to be updated, got %q", store.LastMobilePrompt)
 	}
 }
+
+func TestHeartbeatAndDisconnectEndpoints(t *testing.T) {
+	mux := server.SetupRoutes(nil)
+
+	// Test /api/heartbeat
+	reqHb := httptest.NewRequest(http.MethodPost, "/api/heartbeat?client=test_tab_1", nil)
+	rrHb := httptest.NewRecorder()
+	mux.ServeHTTP(rrHb, reqHb)
+
+	if rrHb.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK from /api/heartbeat, got %d", rrHb.Code)
+	}
+
+	// Test /api/disconnect
+	reqDc := httptest.NewRequest(http.MethodPost, "/api/disconnect?client=test_tab_1", nil)
+	rrDc := httptest.NewRecorder()
+	mux.ServeHTTP(rrDc, reqDc)
+
+	if rrDc.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK from /api/disconnect, got %d", rrDc.Code)
+	}
+}

@@ -408,4 +408,18 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchAgentOutput();
   setInterval(fetchMobileStatus, 1500);
   setInterval(fetchAgentOutput, 1500);
+
+  // Mobile Client Session Heartbeat
+  const mobileClientId = 'mob_' + Math.random().toString(36).substr(2, 9);
+  function sendMobileHeartbeat() {
+    fetch('/api/heartbeat?client=' + mobileClientId, { method: 'POST' }).catch(() => {});
+  }
+  sendMobileHeartbeat();
+  setInterval(sendMobileHeartbeat, 3000);
+
+  window.addEventListener('beforeunload', () => {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/disconnect?client=' + mobileClientId);
+    }
+  });
 });

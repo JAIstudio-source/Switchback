@@ -3,19 +3,22 @@
 # https://github.com/JAIstudio-source/Switchback
 # ==============================================================================
 
+param(
+    [string]$InstallDir = ""
+)
+
 $ErrorActionPreference = "Stop"
 $AppName = "SwitchBack"
-$AppVersion = "1.1.0"
+$AppVersion = "1.2.0"
 $Publisher = "JAIstudio"
 $RepoUrl = "https://github.com/JAIstudio-source/Switchback"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 if (-not $ScriptDir) { $ScriptDir = Get-Location }
 
-$InstallDir = Join-Path $env:LOCALAPPDATA "SwitchBack"
-$SourceExe = Join-Path $ScriptDir "switchback.exe"
-$SourceIcon = Join-Path $ScriptDir "icon.png"
-$SourceBatch = Join-Path $ScriptDir "Launch UI.bat"
+if (-not $InstallDir) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA "SwitchBack"
+}
 
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "       SwitchBack Installer & Environment Setup        " -ForegroundColor Yellow
@@ -37,6 +40,7 @@ if ($running) {
 
 # 3. Copy Application Files
 Write-Host "[*] Copying binary and application assets..." -ForegroundColor Cyan
+$SourceExe = Join-Path $ScriptDir "switchback.exe"
 if (Test-Path $SourceExe) {
     Copy-Item -Path $SourceExe -Destination (Join-Path $InstallDir "switchback.exe") -Force
 } else {
@@ -45,49 +49,38 @@ if (Test-Path $SourceExe) {
     Invoke-WebRequest -Uri $downloadUrl -OutFile (Join-Path $InstallDir "switchback.exe") -UseBasicParsing
 }
 
-if (Test-Path (Join-Path $ScriptDir "icon.ico")) {
-    Copy-Item -Path (Join-Path $ScriptDir "icon.ico") -Destination (Join-Path $InstallDir "icon.ico") -Force
+$SourceIco = Join-Path $ScriptDir "icon.ico"
+if (Test-Path $SourceIco) {
+    Copy-Item -Path $SourceIco -Destination (Join-Path $InstallDir "icon.ico") -Force
 }
 
+$SourceIcon = Join-Path $ScriptDir "icon.png"
 if (Test-Path $SourceIcon) {
     Copy-Item -Path $SourceIcon -Destination (Join-Path $InstallDir "icon.png") -Force
 }
 
+$SourceBatch = Join-Path $ScriptDir "Launch UI.bat"
 if (Test-Path $SourceBatch) {
     Copy-Item -Path $SourceBatch -Destination (Join-Path $InstallDir "Launch UI.bat") -Force
 }
 
-# 4. Generate Uninstaller Script
-$UninstallScript = Join-Path $InstallDir "uninstall.ps1"
-$UninstallScriptContent = @"
-`$ErrorActionPreference = "SilentlyContinue"
-Write-Host "Uninstalling SwitchBack..." -ForegroundColor Yellow
-
-# Stop process
-Get-Process -Name "switchback" | Stop-Process -Force
-
-# Remove hooks
-& "$InstallDir\switchback.exe" uninstall
-
-# Remove shortcuts
-Remove-Item "$([Environment]::GetFolderPath('Desktop'))\SwitchBack.lnk" -Force
-Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\SwitchBack.lnk" -Force
-
-# Remove PATH
-`$UserPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
-if (`$UserPath -like "*$InstallDir*") {
-    `$NewPath = (`$UserPath.Split(';') | Where-Object { `$_ -ne "$InstallDir" -and `$_ -ne "" }) -join ';'
-    [Environment]::SetEnvironmentVariable("PATH", `$NewPath, [EnvironmentVariableTarget]::User)
+$SourceReadme = Join-Path $ScriptDir "README.md"
+if (Test-Path $SourceReadme) {
+    Copy-Item -Path $SourceReadme -Destination (Join-Path $InstallDir "README.md") -Force
 }
 
-# Remove Registry
-Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack" -Recurse -Force
+$SourceUninstallBat = Join-Path $ScriptDir "Uninstall.bat"
+if (Test-Path $SourceUninstallBat) {
+    Copy-Item -Path $SourceUninstallBat -Destination (Join-Path $InstallDir "Uninstall.bat") -Force
+}
 
-Write-Host "SwitchBack has been completely uninstalled." -ForegroundColor Green
-"@
-Set-Content -Path $UninstallScript -Value $UninstallScriptContent -Force
+$SourceUninstallPs1 = Join-Path $ScriptDir "Uninstall-SwitchBack.ps1"
+if (Test-Path $SourceUninstallPs1) {
+    Copy-Item -Path $SourceUninstallPs1 -Destination (Join-Path $InstallDir "Uninstall-SwitchBack.ps1") -Force
+    Copy-Item -Path $SourceUninstallPs1 -Destination (Join-Path $InstallDir "uninstall.ps1") -Force
+}
 
-# 5. Create Desktop and Start Menu Shortcuts
+# 4. Create Desktop and Start Menu Shortcuts
 Write-Host "[*] Creating Desktop and Start Menu shortcuts..." -ForegroundColor Cyan
 $WshShell = New-Object -ComObject WScript.Shell
 $IcoPath = Join-Path $InstallDir "icon.ico"
@@ -116,7 +109,17 @@ if (Test-Path $IcoPath) {
 }
 $StartShortcut.Save()
 
-# 6. Add to User PATH
+# Start Menu Uninstall Shortcut
+$StartUninstallShortcut = $WshShell.CreateShortcut((Join-Path $StartMenuPath "Uninstall SwitchBack.lnk"))
+$StartUninstallShortcut.TargetPath = (Join-Path $InstallDir "Uninstall.bat")
+$StartUninstallShortcut.WorkingDirectory = $InstallDir
+$StartUninstallShortcut.Description = "Uninstall SwitchBack from your computer"
+if (Test-Path $IcoPath) {
+    $StartUninstallShortcut.IconLocation = "$IcoPath,0"
+}
+$StartUninstallShortcut.Save()
+
+# 5. Add to User PATH
 Write-Host "[*] Adding SwitchBack to user PATH environment variable..." -ForegroundColor Cyan
 $CurrentPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
 if ($CurrentPath -notlike "*$InstallDir*") {
@@ -126,23 +129,24 @@ if ($CurrentPath -notlike "*$InstallDir*") {
     Write-Host "[OK] Added to PATH. 'switchback' command is now available everywhere!" -ForegroundColor Green
 }
 
-# 7. Register in Windows Add/Remove Programs (Control Panel & Settings)
+# 6. Register in Windows Add/Remove Programs (Control Panel & Settings)
 Write-Host "[*] Registering in Windows Add/Remove Programs..." -ForegroundColor Cyan
 $UninstallRegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack"
 if (-not (Test-Path $UninstallRegKey)) {
     New-Item -Path $UninstallRegKey -Force | Out-Null
 }
+$UninstallExe = Join-Path $InstallDir "Uninstall.bat"
 Set-ItemProperty -Path $UninstallRegKey -Name "DisplayName" -Value "SwitchBack"
 Set-ItemProperty -Path $UninstallRegKey -Name "DisplayVersion" -Value $AppVersion
 Set-ItemProperty -Path $UninstallRegKey -Name "Publisher" -Value $Publisher
 Set-ItemProperty -Path $UninstallRegKey -Name "InstallLocation" -Value $InstallDir
-Set-ItemProperty -Path $UninstallRegKey -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$UninstallScript`""
+Set-ItemProperty -Path $UninstallRegKey -Name "UninstallString" -Value "`"$UninstallExe`""
 Set-ItemProperty -Path $UninstallRegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir "icon.ico")
 Set-ItemProperty -Path $UninstallRegKey -Name "HelpLink" -Value $RepoUrl
 Set-ItemProperty -Path $UninstallRegKey -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $UninstallRegKey -Name "NoRepair" -Value 1 -Type DWord
 
-# 8. Refresh Windows Shell & Icon Cache
+# 7. Refresh Windows Shell & Icon Cache
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -153,7 +157,7 @@ public class ShellHelper {
 "@
 [ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 
-# 9. Configure AI Agent Hooks
+# 8. Configure AI Agent Hooks
 Write-Host "[*] Configuring agent hooks for Antigravity IDE and Claude Code..." -ForegroundColor Cyan
 & (Join-Path $InstallDir "switchback.exe") install | Out-Null
 
@@ -163,4 +167,5 @@ Write-Host "=======================================================" -Foreground
 Write-Host " 🚀 Desktop Shortcut: Created on Desktop" -ForegroundColor White
 Write-Host " 💻 Start Menu:       Available in Windows Start Menu" -ForegroundColor White
 Write-Host " ⚡ Terminal Command: Type 'switchback' or 'switchback ui'" -ForegroundColor White
+Write-Host " 🗑️  Uninstaller:      Uninstall.bat or Start Menu" -ForegroundColor White
 Write-Host "=======================================================" -ForegroundColor Green

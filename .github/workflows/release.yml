@@ -22,8 +22,16 @@ jobs:
           go-version: '1.24'
           cache: true
 
+      - name: Install rsrc Tool
+        run: go install github.com/akavel/rsrc@latest
+
       - name: Run Tests
         run: go test -v ./...
+
+      - name: Build Windows Syso Resources with Icon
+        run: |
+          rsrc -ico icon.ico -arch amd64 -o cmd/switchback/switchback.syso
+          rsrc -ico icon.ico -arch amd64 -o cmd/installer/installer.syso
 
       - name: Build SwitchBack Executable & Setup Installer
         run: |
@@ -33,15 +41,20 @@ jobs:
           # Prepare assets for embedded standalone installer
           Copy-Item dist/switchback.exe cmd/installer/switchback.exe -Force
           Copy-Item icon.png cmd/installer/icon.png -Force
+          Copy-Item icon.ico cmd/installer/icon.ico -Force
+          Copy-Item README.md cmd/installer/README.md -Force
           Copy-Item "Launch UI.bat" cmd/installer/Launch_UI.bat -Force
 
           # Build Standalone Graphical Setup.exe
           go build -ldflags="-H=windowsgui -s -w" -o dist/Setup.exe ./cmd/installer
 
+          Copy-Item "icon.ico" -Destination "dist/icon.ico" -Force
           Copy-Item "icon.png" -Destination "dist/icon.png" -Force
           Copy-Item "Launch UI.bat" -Destination "dist/Launch UI.bat" -Force
           Copy-Item "Install.bat" -Destination "dist/Install.bat" -Force
           Copy-Item "Install-SwitchBack.ps1" -Destination "dist/Install-SwitchBack.ps1" -Force
+          Copy-Item "Uninstall.bat" -Destination "dist/Uninstall.bat" -Force
+          Copy-Item "Uninstall-SwitchBack.ps1" -Destination "dist/Uninstall-SwitchBack.ps1" -Force
           Copy-Item "README.md" -Destination "dist/README.md" -Force
 
       - name: Generate Checksums

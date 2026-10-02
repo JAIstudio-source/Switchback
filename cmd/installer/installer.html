@@ -6,15 +6,21 @@
   <title>SwitchBack Setup</title>
   <style>
     :root {
-      --bg-dark: #0f111a;
-      --card-bg: #1a1c29;
-      --card-border: #2d3148;
-      --accent-gold: #f9ca24;
-      --accent-cyan: #00d2d3;
-      --accent-emerald: #10ac84;
-      --text-main: #f5f6fa;
-      --text-muted: #8890a6;
-      --font-pixel: 'Courier New', Courier, monospace;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #1e2238 0%, #0d0e17 100%);
+      --card-bg: rgba(22, 25, 42, 0.85);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --card-border-hover: rgba(99, 102, 241, 0.4);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --primary-glow: rgba(99, 102, 241, 0.35);
+      --success: #10b981;
+      --success-hover: #059669;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --input-bg: rgba(15, 17, 28, 0.8);
+      --input-border: rgba(255, 255, 255, 0.12);
+      --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     }
 
     * {
@@ -25,305 +31,567 @@
     }
 
     body {
-      background-color: var(--bg-dark);
+      background: var(--bg-gradient);
       color: var(--text-main);
-      font-family: var(--font-pixel);
+      font-family: var(--font-family);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      padding: 20px;
+      padding: 24px;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
-    .installer-card {
-      background: var(--card-bg);
-      border: 3px solid var(--card-border);
-      box-shadow: 0 16px 40px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.05);
-      border-radius: 12px;
+    .installer-container {
       width: 100%;
-      max-width: 480px;
-      padding: 28px;
-      text-align: center;
+      max-width: 490px;
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
       position: relative;
+      animation: fadeIn 0.4s ease-out;
     }
 
-    .header-logo {
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo-badge {
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(16, 185, 129, 0.1));
+      border: 1px solid rgba(255, 255, 255, 0.15);
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 12px;
-      margin-bottom: 8px;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+      flex-shrink: 0;
     }
 
     .logo-img {
-      width: 48px;
-      height: 48px;
-      image-rendering: pixelated;
+      width: 40px;
+      height: 40px;
+      object-fit: contain;
     }
 
-    h1 {
+    .header-info h1 {
       font-size: 22px;
-      font-weight: 800;
-      letter-spacing: 2px;
-      color: var(--accent-gold);
-      text-transform: uppercase;
-      text-shadow: 2px 2px 0px #000;
-    }
-
-    .tagline {
-      font-size: 11px;
-      color: var(--text-muted);
-      letter-spacing: 1px;
-      margin-bottom: 20px;
-      text-transform: uppercase;
-    }
-
-    .feature-list {
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 14px;
-      text-align: left;
-      margin-bottom: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .feature-item {
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: -0.5px;
       display: flex;
       align-items: center;
-      gap: 10px;
-      font-size: 12px;
-      color: #dcdde1;
+      gap: 8px;
     }
 
-    .feature-icon {
-      font-size: 16px;
+    .version-tag {
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 2px 8px;
+      border-radius: 12px;
+      letter-spacing: 0;
     }
 
-    .install-path-box {
-      font-size: 10px;
+    .header-info p {
+      font-size: 13px;
       color: var(--text-muted);
-      background: rgba(0,0,0,0.2);
-      padding: 8px;
-      border-radius: 4px;
-      margin-bottom: 20px;
-      word-break: break-all;
+      margin-top: 3px;
     }
 
-    .btn-install {
-      background: var(--accent-gold);
-      color: #111;
-      font-family: inherit;
+    .features-card {
+      background: rgba(10, 12, 20, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .feature-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .feature-icon-circle {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 14px;
-      font-weight: 800;
-      padding: 14px 28px;
-      border: 2px solid #000;
-      border-radius: 6px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .feature-content {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #cbd5e1;
+    }
+
+    .feature-content strong {
+      color: #f1f5f9;
+      font-weight: 600;
+    }
+
+    .path-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .path-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .path-input-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .path-input {
+      flex: 1;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text-main);
+      outline: none;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .path-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    }
+
+    .btn-browse {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid var(--input-border);
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 0 16px;
+      font-size: 12px;
+      font-weight: 600;
       cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+
+    .btn-browse:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 8px 20px var(--primary-glow);
+      transition: all 0.2s ease;
+      font-family: inherit;
       width: 100%;
-      letter-spacing: 1px;
-      box-shadow: 0 4px 0 #000;
-      transition: all 0.1s ease;
-      text-transform: uppercase;
     }
 
-    .btn-install:hover {
-      background: #fed330;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 0 #000;
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 12px 24px var(--primary-glow);
     }
 
-    .btn-install:active {
-      transform: translateY(2px);
-      box-shadow: 0 2px 0 #000;
+    .btn-primary:active {
+      transform: translateY(1px);
     }
 
-    .btn-install:disabled {
-      background: #4b6584;
-      color: #888;
-      cursor: not-allowed;
-      box-shadow: none;
-      transform: none;
+    .btn-success {
+      background: var(--success);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
+      transition: all 0.2s ease;
+      font-family: inherit;
+      flex: 1;
     }
 
-    .progress-container {
+    .btn-success:hover {
+      background: var(--success-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 12px 24px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      flex: 1;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .progress-box {
       display: none;
-      margin-top: 10px;
-      text-align: left;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 0;
     }
 
-    .progress-bar-bg {
-      background: #2f3640;
-      border: 1px solid #485460;
-      border-radius: 4px;
-      height: 18px;
+    .progress-bar-track {
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      height: 10px;
       overflow: hidden;
-      margin-bottom: 8px;
       position: relative;
     }
 
-    .progress-bar-fill {
-      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald));
+    .progress-bar-thumb {
       height: 100%;
       width: 0%;
+      background: linear-gradient(90deg, #6366f1, #10b981);
+      border-radius: 10px;
       transition: width 0.3s ease;
     }
 
     .progress-status {
-      font-size: 11px;
-      color: var(--accent-cyan);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      color: var(--text-muted);
     }
 
     .success-panel {
       display: none;
       flex-direction: column;
-      gap: 14px;
+      gap: 18px;
+      text-align: center;
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .success-icon-wrapper {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      border: 2px solid var(--success);
+      display: flex;
       align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+      font-size: 28px;
+      color: var(--success);
     }
 
-    .success-badge {
-      background: rgba(16, 172, 132, 0.2);
-      border: 1px solid var(--accent-emerald);
-      color: var(--accent-emerald);
-      padding: 10px 16px;
-      border-radius: 6px;
+    .success-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .success-desc {
       font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .installed-list {
+      background: rgba(10, 12, 20, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 14px 16px;
+      text-align: left;
+      font-size: 12px;
+      color: #94a3b8;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .installed-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .installed-item span.check {
+      color: var(--success);
       font-weight: bold;
-      width: 100%;
     }
 
-    .btn-launch {
-      background: var(--accent-emerald);
-      color: #fff;
-      font-family: inherit;
-      font-size: 14px;
-      font-weight: 800;
-      padding: 14px 28px;
-      border: 2px solid #000;
-      border-radius: 6px;
-      cursor: pointer;
-      width: 100%;
-      letter-spacing: 1px;
-      box-shadow: 0 4px 0 #000;
-      text-transform: uppercase;
-    }
-
-    .btn-launch:hover {
-      background: #1dd1a1;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 0 #000;
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 6px;
     }
 
     .footer {
-      margin-top: 16px;
-      font-size: 9px;
-      color: #576574;
-      text-transform: uppercase;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 4px;
+    }
+
+    .footer a {
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer a:hover {
+      color: var(--text-muted);
     }
   </style>
 </head>
 <body>
 
-  <div class="installer-card">
-    <div class="header-logo">
-      <img src="icon.png" class="logo-img" alt="SwitchBack Logo">
-      <div>
-        <h1>SwitchBack</h1>
-        <div class="tagline">Setup &amp; Environment Installer &bull; v1.1.0</div>
+  <div class="installer-container">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo-badge">
+        <img src="icon.png" class="logo-img" alt="SwitchBack">
+      </div>
+      <div class="header-info">
+        <h1>SwitchBack <span class="version-tag">v1.2.0</span></h1>
+        <p>Smart focus switcher &amp; mobile remote</p>
       </div>
     </div>
 
-    <!-- Initial Setup Info Screen -->
-    <div id="setup-screen">
-      <div class="feature-list">
-        <div class="feature-item">
-          <span class="feature-icon">🔄</span>
-          <span><b>Auto Focus Switcher</b> &bull; VLC, YouTube, Spotify &amp; Gaming</span>
+    <!-- Step 1: Configuration & Overview -->
+    <div id="setup-screen" style="display: flex; flex-direction: column; gap: 18px;">
+      <div class="features-card">
+        <div class="feature-row">
+          <div class="feature-icon-circle">🎬</div>
+          <div class="feature-content">
+            <strong>Smart Focus Auto-Switch</strong><br>
+            Returns to your video, music, or game while waiting for coding agents.
+          </div>
         </div>
-        <div class="feature-item">
-          <span class="feature-icon">📱</span>
-          <span><b>Mobile Remote Controller</b> &bull; Control PC agent from phone</span>
+        <div class="feature-row">
+          <div class="feature-icon-circle">📱</div>
+          <div class="feature-content">
+            <strong>Mobile Remote Control</strong><br>
+            Track AI progress and approve steps right from your phone.
+          </div>
         </div>
-        <div class="feature-item">
-          <span class="feature-icon">🤖</span>
-          <span><b>Universal Hooks</b> &bull; Antigravity, Claude, Cursor &amp; Windsurf</span>
-        </div>
-        <div class="feature-item">
-          <span class="feature-icon">⚡</span>
-          <span><b>Desktop &amp; Start Menu Shortcuts</b> with custom icon</span>
+        <div class="feature-row">
+          <div class="feature-icon-circle">⚡</div>
+          <div class="feature-content">
+            <strong>Ready Out of the Box</strong><br>
+            Works instantly with Antigravity, Claude Code, Cursor, and Windsurf.
+          </div>
         </div>
       </div>
 
-      <div class="install-path-box">
-        Destination: <span id="dest-path">%LOCALAPPDATA%\SwitchBack</span>
+      <div class="path-section">
+        <div class="path-label-row">
+          <span>Install Destination</span>
+          <span style="font-size: 11px; color: var(--text-dim);">Customizable</span>
+        </div>
+        <div class="path-input-group">
+          <input type="text" id="dest-path" class="path-input" placeholder="Select destination folder...">
+          <button id="btn-browse" class="btn-browse" title="Choose another folder">Browse...</button>
+        </div>
       </div>
 
-      <button id="btn-start-install" class="btn-install">🚀 Install SwitchBack Now</button>
+      <button id="btn-start-install" class="btn-primary">
+        <span>🚀 Install SwitchBack</span>
+      </button>
     </div>
 
-    <!-- Progress Screen -->
-    <div id="progress-screen" class="progress-container">
-      <div class="progress-bar-bg">
-        <div id="progress-bar" class="progress-bar-fill"></div>
+    <!-- Step 2: Progress -->
+    <div id="progress-screen" class="progress-box">
+      <div class="progress-status">
+        <span id="progress-text">Preparing setup...</span>
+        <span id="progress-pct">0%</span>
       </div>
-      <div id="progress-text" class="progress-status">Preparing installation...</div>
+      <div class="progress-bar-track">
+        <div id="progress-bar" class="progress-bar-thumb"></div>
+      </div>
     </div>
 
-    <!-- Success Screen -->
+    <!-- Step 3: Setup Completed -->
     <div id="success-screen" class="success-panel">
-      <div class="success-badge">
-        ✔ SwitchBack Successfully Installed!
+      <div class="success-icon-wrapper">✓</div>
+      <div>
+        <div class="success-title">SwitchBack is Ready!</div>
+        <div class="success-desc">Installation completed successfully on your computer.</div>
       </div>
-      <div style="font-size:11px;color:#c8d6e5;text-align:left;width:100%;line-height:1.6;">
-        &bull; <b>Desktop Shortcut</b> created with official icon.<br>
-        &bull; <b>Start Menu</b> registered (indexed in Windows Search).<br>
-        &bull; <b>Global Command</b> <code>switchback</code> enabled in PATH.<br>
-        &bull; <b>Agent Hooks</b> configured for Antigravity &amp; Claude.
+
+      <div class="installed-list">
+        <div class="installed-item">
+          <span class="check">✓</span>
+          <span>Desktop &amp; Start Menu shortcuts created with official logo</span>
+        </div>
+        <div class="installed-item">
+          <span class="check">✓</span>
+          <span>Global <code>switchback</code> command available in command prompt</span>
+        </div>
+        <div class="installed-item">
+          <span class="check">✓</span>
+          <span>Uninstaller added to Start Menu &amp; Windows Settings</span>
+        </div>
       </div>
-      <button id="btn-launch-app" class="btn-launch">🎮 Launch SwitchBack</button>
+
+      <div class="button-group">
+        <button id="btn-close-setup" class="btn-secondary">
+          ✕ Close
+        </button>
+        <button id="btn-launch-app" class="btn-success">
+          🚀 Open App
+        </button>
+      </div>
     </div>
 
-    <div class="footer">JAIstudio &bull; MIT Open Source License</div>
+    <!-- Footer -->
+    <div class="footer">
+      <span>JAIstudio &bull; Free &amp; Open Source</span>
+      <a href="https://github.com/JAIstudio-source/Switchback" target="_blank">GitHub</a>
+    </div>
   </div>
 
   <script>
+    const destPathInput = document.getElementById('dest-path');
+    const btnBrowse = document.getElementById('btn-browse');
     const btnInstall = document.getElementById('btn-start-install');
     const setupScreen = document.getElementById('setup-screen');
     const progressScreen = document.getElementById('progress-screen');
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
+    const progressPct = document.getElementById('progress-pct');
     const successScreen = document.getElementById('success-screen');
     const btnLaunch = document.getElementById('btn-launch-app');
+    const btnClose = document.getElementById('btn-close-setup');
 
+    // Fetch default installation directory from backend
+    fetch('/api/default-path')
+      .then(res => res.json())
+      .then(data => {
+        if (data.path) {
+          destPathInput.value = data.path;
+        }
+      })
+      .catch(() => {
+        destPathInput.value = '%LOCALAPPDATA%\\SwitchBack';
+      });
+
+    // Browse custom path
+    btnBrowse.addEventListener('click', async () => {
+      btnBrowse.disabled = true;
+      btnBrowse.textContent = 'Selecting...';
+      try {
+        const res = await fetch('/api/browse');
+        const data = await res.json();
+        if (data.path) {
+          destPathInput.value = data.path;
+        }
+      } catch (err) {
+        console.error('Browse error:', err);
+      } finally {
+        btnBrowse.disabled = false;
+        btnBrowse.textContent = 'Browse...';
+      }
+    });
+
+    // Start Install
     btnInstall.addEventListener('click', async () => {
+      const chosenPath = destPathInput.value.trim();
       btnInstall.disabled = true;
       setupScreen.style.display = 'none';
-      progressScreen.style.display = 'block';
+      progressScreen.style.display = 'flex';
 
       const steps = [
-        { pct: 20, text: 'Creating installation directories...' },
-        { pct: 45, text: 'Deploying SwitchBack binaries & pixel assets...' },
-        { pct: 70, text: 'Generating Desktop and Start Menu shortcuts...' },
-        { pct: 85, text: 'Updating user PATH & Windows Search index...' },
-        { pct: 95, text: 'Configuring Antigravity & Claude agent hooks...' }
+        { pct: 20, text: 'Creating destination folders...' },
+        { pct: 45, text: 'Copying application files & logo assets...' },
+        { pct: 70, text: 'Creating Desktop & Start Menu shortcuts...' },
+        { pct: 85, text: 'Setting up uninstaller & system path...' },
+        { pct: 95, text: 'Connecting with your coding tools...' }
       ];
 
       for (let i = 0; i < steps.length; i++) {
         progressBar.style.width = steps[i].pct + '%';
+        progressPct.textContent = steps[i].pct + '%';
         progressText.textContent = steps[i].text;
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 220));
       }
 
       try {
-        const res = await fetch('/api/install', { method: 'POST' });
+        const res = await fetch('/api/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ installPath: chosenPath })
+        });
         const data = await res.json();
 
         progressBar.style.width = '100%';
-        progressText.textContent = 'Finalizing installation...';
+        progressPct.textContent = '100%';
+        progressText.textContent = 'Setup completed!';
         await new Promise(r => setTimeout(r, 400));
 
         progressScreen.style.display = 'none';
@@ -333,14 +601,24 @@
       }
     });
 
+    // Launch App
     btnLaunch.addEventListener('click', async () => {
       btnLaunch.disabled = true;
-      btnLaunch.textContent = 'Launching...';
+      btnLaunch.textContent = 'Starting...';
       try {
         await fetch('/api/launch', { method: 'POST' });
-        setTimeout(() => {
-          window.close();
-        }, 800);
+        setTimeout(() => window.close(), 600);
+      } catch (e) {
+        window.close();
+      }
+    });
+
+    // Close Setup
+    btnClose.addEventListener('click', async () => {
+      btnClose.disabled = true;
+      try {
+        await fetch('/api/close', { method: 'POST' });
+        setTimeout(() => window.close(), 200);
       } catch (e) {
         window.close();
       }

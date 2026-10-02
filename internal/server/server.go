@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -9,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +23,68 @@ import (
 	"switchback/internal/state"
 	"switchback/internal/win32"
 )
+
+var (
+	clientMu      sync.Mutex
+	activeClients = make(map[string]time.Time)
+	hasHadClients = false
+)
+
+func RegisterClientHeartbeat(id string) {
+	if id == "" {
+		return
+	}
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	activeClients[id] = time.Now()
+	hasHadClients = true
+}
+
+func DeregisterClient(id string) {
+	if id == "" {
+		return
+	}
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	delete(activeClients, id)
+}
+
+func runClientActivityMonitor() {
+	// Give initial 15-second grace period for browser window to launch and register heartbeat
+	time.Sleep(15 * time.Second)
+
+	emptyCount := 0
+	for {
+		time.Sleep(2 * time.Second)
+
+		clientMu.Lock()
+		now := time.Now()
+		// Evict stale clients (> 8 seconds without heartbeat)
+		for id, lastSeen := range activeClients {
+			if now.Sub(lastSeen) > 8*time.Second {
+				delete(activeClients, id)
+			}
+		}
+
+		numClients := len(activeClients)
+		shouldCheck := hasHadClients
+		clientMu.Unlock()
+
+		if shouldCheck {
+			if numClients == 0 {
+				emptyCount++
+				// If 0 clients connected for 6 seconds (3 consecutive ticks of 2s)
+				if emptyCount >= 3 {
+					logger.Info("[Server] All browser windows/tabs closed. Terminating SwitchBack background process.")
+					fmt.Println("\n[INFO] All browser windows closed. SwitchBack stopped.")
+					os.Exit(0)
+				}
+			} else {
+				emptyCount = 0
+			}
+		}
+	}
+}
 
 // StartServer launches the HTTP server and opens the browser.
 func StartServer(port int, embeddedFS fs.FS) error {
@@ -69,13 +134,31 @@ func StartServer(port int, embeddedFS fs.FS) error {
 	fmt.Println(" Press Ctrl+C in this terminal window to stop.")
 	fmt.Println("=======================================================")
 
+	// Monitor client windows closing in background
+	go runClientActivityMonitor()
+
+	// Handle terminal shutdown signals (Ctrl+C, SIGTERM, SIGINT)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+
+	server := &http.Server{Handler: mux}
+
+	go func() {
+		<-sigChan
+		fmt.Println("\n[INFO] Termination signal received. Stopping SwitchBack...")
+		logger.Info("[Server] Termination signal received. Exiting.")
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		os.Exit(0)
+	}()
+
 	// Automatically open browser using Windows ShellExecuteW
 	go func() {
 		time.Sleep(300 * time.Millisecond)
 		_ = win32.OpenURL(url)
 	}()
 
-	server := &http.Server{Handler: mux}
 	return server.Serve(listener)
 }
 
@@ -98,6 +181,10 @@ func SetupRoutes(embeddedFS fs.FS) *http.ServeMux {
 	mux.HandleFunc("/api/install", handleInstall)
 	mux.HandleFunc("/api/uninstall-hooks", handleUninstallHooks)
 	mux.HandleFunc("/api/logs", handleLogs)
+	mux.HandleFunc("/api/shutdown", handleShutdown)
+	mux.HandleFunc("/api/exit", handleShutdown)
+	mux.HandleFunc("/api/heartbeat", handleHeartbeat)
+	mux.HandleFunc("/api/disconnect", handleDisconnect)
 
 	// Mobile Remote Controller Endpoints
 	mux.HandleFunc("/api/mobile/info", handleMobileInfo)
@@ -125,6 +212,41 @@ func SetupRoutes(embeddedFS fs.FS) *http.ServeMux {
 	}
 
 	return mux
+}
+
+func handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	logger.Info("[Server] Shutdown requested from UI / API.")
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "SwitchBack server is shutting down...",
+	})
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		fmt.Println("\n[INFO] SwitchBack stopped by user.")
+		os.Exit(0)
+	}()
+}
+
+func handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	clientID := r.URL.Query().Get("client")
+	if clientID != "" {
+		RegisterClientHeartbeat(clientID)
+	}
+	writeJSON(w, map[string]interface{}{"status": "ok"})
+}
+
+func handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	clientID := r.URL.Query().Get("client")
+	if clientID != "" {
+		DeregisterClient(clientID)
+	}
+	writeJSON(w, map[string]interface{}{"status": "ok"})
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
