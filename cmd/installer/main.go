@@ -39,6 +39,16 @@ type InstallPayload struct {
 	InstallPath string `json:"installPath"`
 }
 
+var (
+	shell32DLL         = syscall.NewLazyDLL("shell32.dll")
+	procSHChangeNotify = shell32DLL.NewProc("SHChangeNotify")
+)
+
+func refreshShellIcons() {
+	// SHCNE_ASSOCCHANGED = 0x08000000, SHCNF_IDLIST = 0x0000
+	_, _, _ = procSHChangeNotify.Call(0x08000000, 0, 0, 0)
+}
+
 func main() {
 	// 1. Setup local HTTP server on random available port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -256,24 +266,13 @@ Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBac
 
 # Schedule folder cleanup
 Start-Process -FilePath "cmd.exe" -ArgumentList ("/c timeout /t 1 /nobreak >nul & rd /s /q """ + $InstallDir + """") -WindowStyle Hidden
-
-# Refresh Shell
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class ShellHelper {
-    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-}
-"@
-[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 Write-Host "SwitchBack has been completely uninstalled." -ForegroundColor Green
 `, strings.ReplaceAll(installDir, `\`, `\\`))
 
 	_ = os.WriteFile(filepath.Join(installDir, "uninstall.ps1"), []byte(uninstallPs1), 0644)
 	_ = os.WriteFile(filepath.Join(installDir, "Uninstall.bat"), []byte("@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0uninstall.ps1\"\r\npause\r\n"), 0644)
 
-	// Run PowerShell script for shortcuts with real icon.ico and Shell Refresh
+	// Run PowerShell script for shortcuts with real icon.ico and registry registration
 	psScript := fmt.Sprintf(`
 $InstallDir = "%s"
 $WshShell = New-Object -ComObject WScript.Shell
@@ -327,22 +326,14 @@ Set-ItemProperty -Path $RegKey -Name "DisplayIcon" -Value (Join-Path $InstallDir
 Set-ItemProperty -Path $RegKey -Name "HelpLink" -Value "%s"
 Set-ItemProperty -Path $RegKey -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $RegKey -Name "NoRepair" -Value 1 -Type DWord
-
-# 6. Flush Windows Shell Icon Cache & Windows Search Notification
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class ShellHelper {
-    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-}
-"@
-[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
 `, strings.ReplaceAll(installDir, `\`, `\\`), AppVersion, Publisher, RepoURL)
 
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
+
+	// Flush Windows Shell Icon Cache via native Win32 DLL
+	refreshShellIcons()
 
 	// Configure Agent Hooks
 	hookCmd := exec.Command(targetExe, "install")

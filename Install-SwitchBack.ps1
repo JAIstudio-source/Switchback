@@ -147,15 +147,7 @@ Set-ItemProperty -Path $UninstallRegKey -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $UninstallRegKey -Name "NoRepair" -Value 1 -Type DWord
 
 # 7. Refresh Windows Shell & Icon Cache
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class ShellHelper {
-    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-}
-"@
-[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
+& ie4uinit.exe -show 2>$null
 
 # 8. Configure AI Agent Hooks
 Write-Host "[*] Configuring agent hooks for Antigravity IDE and Claude Code..." -ForegroundColor Cyan

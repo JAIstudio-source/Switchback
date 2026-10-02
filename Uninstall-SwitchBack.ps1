@@ -82,15 +82,7 @@ if (Test-Path $InstallDir) {
 }
 
 # Refresh Windows Shell
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class ShellHelper {
-    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern void SHChangeNotify(uint wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
-}
-"@
-[ShellHelper]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
+& ie4uinit.exe -show 2>$null
 
 Write-Host ""
 Write-Host "=======================================================" -ForegroundColor Green
