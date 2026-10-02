@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#121316">
+  <title>switchback // Mobile Remote</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="mobile.css">
+</head>
+<body class="mobile-theme">
+  <!-- Mobile Header -->
+  <header class="mobile-header">
+    <div class="mobile-brand">
+      <img src="icon.png" class="brand-pixel-icon" alt="SwitchBack Icon">
+      <div class="mobile-brand-text">
+        <span class="mobile-logo">SWITCHBACK</span>
+        <span class="mobile-badge" id="mobile-status-badge">● CONNECTED</span>
+      </div>
+    </div>
+    <div class="mobile-nav-tools">
+      <button id="btn-haptics-toggle" class="m-btn m-btn-tool" title="Toggle Haptics / Vibration">
+        <span id="haptic-icon">📳</span> <span id="haptic-text">ON</span>
+      </button>
+      <button id="btn-sound-toggle" class="m-btn m-btn-tool" title="Toggle Audio Feedback">
+        <span id="sound-icon">🔊</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="mobile-container">
+    <!-- Primary Focus Mode Banner -->
+    <div class="m-card m-guard-card">
+      <div class="guard-header">
+        <span class="guard-icon">🛡️</span>
+        <div class="guard-titles">
+          <h3>MOBILE PRIMARY MODE</h3>
+          <p>PC window focus switching is suppressed</p>
+        </div>
+        <label class="m-switch-label">
+          <input type="checkbox" id="toggle-mobile-primary" checked class="m-switch">
+        </label>
+      </div>
+    </div>
+
+    <!-- Live Agent Status & PC Media Bar -->
+    <div class="m-card m-info-card">
+      <div class="m-info-row">
+        <div class="m-info-group">
+          <span class="m-label">ACTIVE AGENT:</span>
+          <span class="m-val highlight-gold" id="m-agent-name">Scanning...</span>
+        </div>
+        <div class="m-info-group">
+          <span class="m-label">PC TARGET WINDOW:</span>
+          <span class="m-val highlight-emerald" id="m-work-name">None Selected</span>
+        </div>
+      </div>
+      <div class="m-media-row">
+        <button id="btn-mobile-media" class="m-btn m-btn-media w-100">
+          <span>⏯ TOGGLE PC MEDIA (PLAY/PAUSE)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Active Approval Card (Dynamically displayed when agent needs input) -->
+    <section class="m-card m-approval-card" id="m-approval-section">
+      <div class="approval-badge">🔔 PERMISSION NEEDED</div>
+      <h2 class="approval-title" id="m-approval-title">Action Approval Required</h2>
+      <p class="approval-desc" id="m-approval-desc">The AI Agent is requesting permission to execute an action or tool call.</p>
+      
+      <!-- Dynamic Options Container -->
+      <div class="approval-options" id="m-approval-options">
+        <button class="m-btn m-btn-approve" id="btn-approve">
+          <span>✔ APPROVE / ALLOW</span>
+        </button>
+        <button class="m-btn m-btn-deny" id="btn-deny">
+          <span>✖ DENY / CANCEL</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Hybrid Mode Selector Tabs -->
+    <div class="m-card m-tabs-card">
+      <div class="m-mode-tabs">
+        <button type="button" class="m-tab-btn active" id="tab-ai-mode">🤖 AI REMOTE</button>
+        <button type="button" class="m-tab-btn" id="tab-dev-mode">⚡ DEV RUNNER</button>
+      </div>
+    </div>
+
+    <!-- AI Prompt & Command Section -->
+    <section class="m-card m-prompt-card" id="section-ai-mode">
+      <div class="m-card-header">
+        <span class="header-icon">💬</span>
+        <h2>SEND COMMAND TO AGENT</h2>
+      </div>
+      
+      <!-- AI Quick Chips -->
+      <div class="quick-chips">
+        <button type="button" class="m-chip" data-prompt="Looks good, proceed!">🚀 Proceed</button>
+        <button type="button" class="m-chip" data-prompt="Continue next step.">▶ Continue</button>
+        <button type="button" class="m-chip" data-prompt="Run tests and verify.">🧪 Run Tests</button>
+        <button type="button" class="m-chip" data-prompt="Fix linter errors and rebuild.">🛠 Fix Linter</button>
+      </div>
+
+      <!-- Custom Prompt Text Area -->
+      <div class="prompt-input-group">
+        <textarea id="m-prompt-input" rows="2" placeholder="Type instructions for your AI agent..." class="m-textarea"></textarea>
+        <button id="btn-send-prompt" class="m-btn m-btn-gold w-100">
+          <span>🚀 SEND PROMPT TO AGENT</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Autonomous Dev Runner Section (Direct Shell/Script Execution) -->
+    <section class="m-card m-prompt-card" id="section-dev-mode" style="display:none;">
+      <div class="m-card-header">
+        <span class="header-icon">⚡</span>
+        <h2>AUTONOMOUS DEV TASK RUNNER</h2>
+      </div>
+      
+      <!-- Dev Runner Quick Chips -->
+      <div class="quick-chips">
+        <button type="button" class="m-chip dev-chip" data-cmd="git status">📂 git status</button>
+        <button type="button" class="m-chip dev-chip" data-cmd="git pull">⬇ git pull</button>
+        <button type="button" class="m-chip dev-chip" data-cmd="go test ./...">🧪 go test</button>
+        <button type="button" class="m-chip dev-chip" data-cmd="go build ./cmd/switchback">🔨 go build</button>
+        <button type="button" class="m-chip dev-chip" data-cmd="git log -n 5 --oneline">📜 git log</button>
+      </div>
+
+      <!-- Custom Command Text Area -->
+      <div class="prompt-input-group">
+        <textarea id="m-cmd-input" rows="2" placeholder="Type shell command (e.g. git status, npm test)..." class="m-textarea"></textarea>
+        <button id="btn-run-cmd" class="m-btn m-btn-emerald w-100">
+          <span>⚡ EXECUTE DEV TASK</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Dedicated Scrollable Agent Response & Output Card -->
+    <section class="m-card m-output-card" id="m-output-section">
+      <div class="m-card-header">
+        <span class="header-icon">🤖</span>
+        <h2>AGENT RESPONSE & LIVE OUTPUT</h2>
+        <button id="btn-copy-output" class="m-btn-mini" title="Copy Output to Clipboard">📋 COPY</button>
+      </div>
+      <div class="m-output-scroll-container">
+        <pre class="m-output-text" id="m-agent-output">Connecting to AI agent live stream...</pre>
+      </div>
+    </section>
+
+    <!-- Live Event Feed -->
+    <section class="m-card m-log-card">
+      <div class="m-card-header">
+        <span class="header-icon">📜</span>
+        <h2>PC ACTIVITY FEED</h2>
+      </div>
+      <div class="m-log-box" id="m-logs">
+        <div class="m-log-line info">&lt;System&gt; Connected to SwitchBack PC Remote.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="m-footer">
+    <span>SWITCHBACK MOBILE REMOTE &bull; PC AUTO-FOCUS SUPPRESSED</span>
+  </footer>
+
+  <script src="mobile.js?v=1.1.2"></script>
+</body>
+</html>

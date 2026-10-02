@@ -16,7 +16,7 @@ $nodes = $template.GetElementsByTagName("text")
 $nodes.Item(0).AppendChild($template.CreateTextNode("%s")) | Out-Null
 $nodes.Item(1).AppendChild($template.CreateTextNode("%s")) | Out-Null
 $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("focusmgr").Show($toast)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("switchback").Show($toast)
 `, escapePS(title), escapePS(message))
 
 		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript)

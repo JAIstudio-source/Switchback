@@ -1,12 +1,1 @@
-{
-  "hooks": [
-    {
-      "event": "Stop",
-      "command": "\"D:\\Download\\AI agent auto switch\\focusmgr.exe\" hook --event Stop --agent antigravity"
-    },
-    {
-      "event": "PreInvocation",
-      "command": "\"D:\\Download\\AI agent auto switch\\focusmgr.exe\" hook --event PreInvocation --agent antigravity"
-    }
-  ]
-}
+{}

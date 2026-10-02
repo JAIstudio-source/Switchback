@@ -51,7 +51,7 @@ func GetConfigFilePath() (string, error) {
 		}
 		localAppData = filepath.Join(home, "AppData", "Local")
 	}
-	dir := filepath.Join(localAppData, "focusmgr")
+	dir := filepath.Join(localAppData, "switchback")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}

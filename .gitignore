@@ -1,11 +1,80 @@
-# Binaries
-focusmgr.exe
-*.exe
+# ==============================================================================
+# SwitchBack - Git Ignore Rules
+# ==============================================================================
 
-# Go build artifacts
+# Executables & Compiled Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+
+# Go Build Artifacts & Caches
 *.o
 *.a
+*.test
+*.prof
+*.cover
+coverage.txt
+coverage.html
+vendor/
 
-# Local state and logs (if placed locally)
+# Certificates, Keys & Secrets (CRITICAL: Do NOT publish private keys)
+*.pfx
+*.p12
+*.key
+*.pem
+*.cer
+*.crt
+*.csr
+*.jks
+*.keystore
+.env
+.env.*
+secrets.json
+config.local.json
+
+# Local State, Cache & Logs
 *.log
-*.tmp.*
+*.tmp
+*.temp
+*~
+*.swp
+*.bak
+*.old
+screen.png
+state.json
+
+# Agent Planning & System Scratch Dirs
+.planning/
+.scratch/
+scratch/
+_scratch/
+extras/_scratch/
+.system_generated/
+
+# OS-generated files
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE & Editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates

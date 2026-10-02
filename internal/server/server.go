@@ -1,25 +1,86 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
-	"focusmgr/internal/installer"
-	"focusmgr/internal/logger"
-	"focusmgr/internal/notify"
-	"focusmgr/internal/state"
-	"focusmgr/internal/win32"
+	"switchback/internal/installer"
+	"switchback/internal/logger"
+	"switchback/internal/notify"
+	"switchback/internal/state"
+	"switchback/internal/win32"
 )
 
 // StartServer launches the HTTP server and opens the browser.
 func StartServer(port int, embeddedFS fs.FS) error {
+	_ = installer.EnsureIDEKeybindings()
+
+	// 1. Check if an existing switchback instance is already running
+	checkURL := fmt.Sprintf("http://127.0.0.1:%d/api/status", port)
+	client := &http.Client{Timeout: 400 * time.Millisecond}
+	if resp, err := client.Get(checkURL); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Println("=======================================================")
+			fmt.Printf(" [PIXEL UI] switchback is ALREADY running at: http://127.0.0.1:%d\n", port)
+			fmt.Println(" Opening dashboard in your default browser...")
+			fmt.Println("=======================================================")
+			_ = win32.OpenURL(fmt.Sprintf("http://127.0.0.1:%d", port))
+			time.Sleep(1200 * time.Millisecond)
+			return nil
+		}
+	}
+
+	mux := SetupRoutes(embeddedFS)
+
+	// Bind to all interfaces (0.0.0.0) so mobile devices on LAN can connect
+	var listener net.Listener
+	var actualPort int = port
+	for p := port; p < port+5; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", p))
+		if err == nil {
+			listener = l
+			actualPort = p
+			break
+		}
+	}
+	if listener == nil {
+		return fmt.Errorf("unable to bind to ports %d-%d", port, port+4)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
+	lanIP := GetPrimaryLANIP()
+	mobileURL := fmt.Sprintf("http://%s:%d/mobile.html", lanIP, actualPort)
+
+	fmt.Println("=======================================================")
+	fmt.Printf(" [PIXEL UI] Dashboard running at:       %s\n", url)
+	fmt.Printf(" [MOBILE]   Phone Controller URL:       %s\n", mobileURL)
+	fmt.Println(" Keep this window open or minimize it.")
+	fmt.Println(" Press Ctrl+C in this terminal window to stop.")
+	fmt.Println("=======================================================")
+
+	// Automatically open browser using Windows ShellExecuteW
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = win32.OpenURL(url)
+	}()
+
+	server := &http.Server{Handler: mux}
+	return server.Serve(listener)
+}
+
+// SetupRoutes constructs the HTTP ServeMux with all API endpoints and static UI assets.
+func SetupRoutes(embeddedFS fs.FS) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// API Handlers
@@ -29,9 +90,25 @@ func StartServer(port int, embeddedFS fs.FS) error {
 	mux.HandleFunc("/api/select-work", handleSelectWork)
 	mux.HandleFunc("/api/pick-work-switch", handlePickWorkSwitch)
 	mux.HandleFunc("/api/toggle-mode", handleToggleMode)
+	mux.HandleFunc("/api/toggle-stopped", handleToggleStopped)
 	mux.HandleFunc("/api/test-focus", handleTestFocus)
+	mux.HandleFunc("/api/test-work", handleTestWork)
+	mux.HandleFunc("/api/test-agent", handleTestAgent)
+	mux.HandleFunc("/api/toggle-media", handleToggleMedia)
 	mux.HandleFunc("/api/install", handleInstall)
+	mux.HandleFunc("/api/uninstall-hooks", handleUninstallHooks)
 	mux.HandleFunc("/api/logs", handleLogs)
+
+	// Mobile Remote Controller Endpoints
+	mux.HandleFunc("/api/mobile/info", handleMobileInfo)
+	mux.HandleFunc("/api/mobile/toggle", handleMobileToggle)
+	mux.HandleFunc("/api/mobile/status", handleMobileStatus)
+	mux.HandleFunc("/api/mobile/reply", handleMobileReply)
+	mux.HandleFunc("/api/mobile/prompt", handleMobilePrompt)
+	mux.HandleFunc("/api/mobile/media", handleMobileMedia)
+	mux.HandleFunc("/api/mobile/ask", handleMobileAsk)
+	mux.HandleFunc("/api/mobile/output", handleMobileOutput)
+	mux.HandleFunc("/api/mobile/execute", handleMobileExecute)
 
 	// Static UI assets
 	var fileServer http.Handler
@@ -39,28 +116,15 @@ func StartServer(port int, embeddedFS fs.FS) error {
 		fileServer = http.FileServer(http.Dir("ui"))
 	} else if sub, err := fs.Sub(embeddedFS, "ui"); err == nil {
 		fileServer = http.FileServer(http.FS(sub))
-	} else {
+	} else if embeddedFS != nil {
 		fileServer = http.FileServer(http.FS(embeddedFS))
 	}
 
-	mux.Handle("/", fileServer)
+	if fileServer != nil {
+		mux.Handle("/", fileServer)
+	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	url := fmt.Sprintf("http://%s", addr)
-
-	fmt.Println("=======================================================")
-	fmt.Printf(" [PIXEL UI] focusmgr dashboard running at: %s\n", url)
-	fmt.Println(" Opening dashboard in your default browser...")
-	fmt.Println(" Press Ctrl+C in this terminal window to stop.")
-	fmt.Println("=======================================================")
-
-	// Automatically open browser
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	}()
-
-	return http.ListenAndServe(addr, mux)
+	return mux
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -79,18 +143,28 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		_ = store.Save()
 	}
 
+	cwd, _ := os.Getwd()
+	agInstalled, claudeInstalled := installer.CheckHooksInstalled(cwd)
+
 	resp := map[string]interface{}{
-		"current_hwnd":         fmt.Sprintf("%d", fg),
-		"current_title":        title,
-		"selected_agent_hwnd":  store.SelectedAgentHWND,
-		"selected_agent_title": store.SelectedAgentTitle,
-		"selected_agent_type":  store.SelectedAgentType,
-		"selected_work_hwnd":   store.SelectedWorkHWND,
-		"selected_work_title":  store.SelectedWorkTitle,
-		"gaming_mode":          store.GamingMode,
-		"auto_switch_enabled":  store.AutoSwitchEnabled,
-		"current_status":       store.CurrentStatus,
-		"active_sessions":      len(store.Sessions),
+		"current_hwnd":          fmt.Sprintf("%d", fg),
+		"current_title":         title,
+		"selected_agent_hwnd":   store.SelectedAgentHWND,
+		"selected_agent_title":  store.SelectedAgentTitle,
+		"selected_agent_type":   store.SelectedAgentType,
+		"selected_work_hwnd":    store.SelectedWorkHWND,
+		"selected_work_title":   store.SelectedWorkTitle,
+		"gaming_mode":           store.GamingMode,
+		"auto_switch_enabled":   store.AutoSwitchEnabled,
+		"fullscreen_guard":     store.FullscreenGuard,
+		"meeting_guard":        store.MeetingGuard,
+		"media_control":        store.MediaControl,
+		"mobile_control_active": store.MobileControlActive,
+		"stopped":              store.Stopped,
+		"current_status":        store.CurrentStatus,
+		"active_sessions":       len(store.Sessions),
+		"antigravity_installed": agInstalled,
+		"claude_installed":      claudeInstalled,
 	}
 
 	writeJSON(w, resp)
@@ -191,17 +265,38 @@ func handleToggleMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		GamingMode        bool `json:"gaming_mode"`
-		AutoSwitchEnabled bool `json:"auto_switch_enabled"`
+		GamingMode          bool `json:"gaming_mode"`
+		AutoSwitchEnabled   bool `json:"auto_switch_enabled"`
+		FullscreenGuard     bool `json:"fullscreen_guard"`
+		MeetingGuard        bool `json:"meeting_guard"`
+		MediaControl        bool `json:"media_control"`
+		MobileControlActive bool `json:"mobile_control_active"`
+		Stopped             bool `json:"stopped"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	_ = state.SetModes(req.GamingMode, req.AutoSwitchEnabled)
-	logger.Info("[Config] Updated modes - GamingMode: %v, AutoSwitch: %v", req.GamingMode, req.AutoSwitchEnabled)
+	_ = state.SetModes(req.GamingMode, req.AutoSwitchEnabled, req.FullscreenGuard, req.MeetingGuard, req.MediaControl, req.MobileControlActive, req.Stopped)
+	logger.Info("[Config] Updated modes - GamingMode: %v, AutoSwitch: %v, FullscreenGuard: %v, MeetingGuard: %v, MediaControl: %v, MobileControlActive: %v, Stopped: %v",
+		req.GamingMode, req.AutoSwitchEnabled, req.FullscreenGuard, req.MeetingGuard, req.MediaControl, req.MobileControlActive, req.Stopped)
 	writeJSON(w, map[string]interface{}{"success": true})
+}
+
+func handleToggleStopped(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	stopped, err := state.ToggleStopped()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logger.Info("[Config] Master Stop toggled. Stopped: %v", stopped)
+	writeJSON(w, map[string]interface{}{"success": true, "stopped": stopped})
 }
 
 func handleTestFocus(w http.ResponseWriter, r *http.Request) {
@@ -217,15 +312,27 @@ func handleTestFocus(w http.ResponseWriter, r *http.Request) {
 		// 1. Task start: switch to work window if set
 		if store.SelectedWorkHWND != 0 && win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
 			_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedWorkHWND))
-			logger.Info("[Test] Switched to Work Window: HWND %d", store.SelectedWorkHWND)
+			logger.Info("[Test] 1/3 Switched to Work/Video Window: HWND %d", store.SelectedWorkHWND)
+
+			if store.MediaControl {
+				time.Sleep(250 * time.Millisecond)
+				win32.ToggleMediaPlayback(win32.HWND(store.SelectedWorkHWND))
+				logger.Info("[Test] 2/3 Auto-resumed video/music playback")
+			}
 		}
 
-		time.Sleep(2500 * time.Millisecond)
+		// Let video play for 4 seconds during simulation
+		time.Sleep(4000 * time.Millisecond)
 
-		// 2. Permission requested
+		// 2. AI Agent completes task
+		if store.MediaControl && store.SelectedWorkHWND != 0 {
+			win32.ToggleMediaPlayback(win32.HWND(store.SelectedWorkHWND))
+			logger.Info("[Test] 3/3 Paused video/music playback before focus switch")
+		}
+
 		if store.GamingMode {
-			logger.Info("[Test] Gaming Mode: Sending Toast Notification for permission!")
-			notify.SendToast("focusmgr // AI Agent Alert", "Agent needs permission: Review tool call!")
+			logger.Info("[Test] Gaming Mode: Sending Toast Notification!")
+			notify.SendToast("switchback // AI Agent Alert", "AI Agent finished its task!")
 		} else if store.SelectedAgentHWND != 0 && win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
 			_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedAgentHWND))
 			logger.Info("[Test] Switched back to Agent Window: HWND %d", store.SelectedAgentHWND)
@@ -235,6 +342,78 @@ func handleTestFocus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{
 		"success": true,
 		"message": "Simulated task flow triggered! Check window focus & notification.",
+	})
+}
+
+func handleTestWork(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	store, _ := state.Load()
+	if store.SelectedWorkHWND == 0 || !win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
+		writeJSON(w, map[string]interface{}{
+			"success": false,
+			"message": "No valid Work window selected. Please pick or select a target window first.",
+		})
+		return
+	}
+
+	_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedWorkHWND))
+	logger.Info("[Test] Step 1: Switched to Work Window HWND %d (\"%s\")", store.SelectedWorkHWND, store.SelectedWorkTitle)
+
+	if store.MediaControl {
+		time.Sleep(200 * time.Millisecond)
+		win32.ToggleMediaPlayback(win32.HWND(store.SelectedWorkHWND))
+		logger.Info("[Test] Step 1: Auto-resumed media playback on target window")
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Switched to Work Target (\"%s\") & resumed media!", store.SelectedWorkTitle),
+	})
+}
+
+func handleTestAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	store, _ := state.Load()
+	if store.SelectedAgentHWND == 0 || !win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
+		writeJSON(w, map[string]interface{}{
+			"success": false,
+			"message": "No valid Agent window selected. Please scan or select an AI agent window.",
+		})
+		return
+	}
+
+	if store.MediaControl && store.SelectedWorkHWND != 0 {
+		win32.ToggleMediaPlayback(win32.HWND(store.SelectedWorkHWND))
+		logger.Info("[Test] Step 2: Auto-paused media playback before switching to Agent")
+	}
+
+	_ = win32.SetForegroundWindowWithBypass(win32.HWND(store.SelectedAgentHWND))
+	logger.Info("[Test] Step 2: Switched back to Agent Window HWND %d (\"%s\")", store.SelectedAgentHWND, store.SelectedAgentTitle)
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Paused media & switched to Agent (\"%s\")!", store.SelectedAgentTitle),
+	})
+}
+
+func handleToggleMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	store, _ := state.Load()
+	targetHwnd := win32.HWND(store.SelectedWorkHWND)
+	win32.ToggleMediaPlayback(targetHwnd)
+	logger.Info("[Test] Triggered direct Media Play/Pause toggle on HWND %d", targetHwnd)
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Sent Play/Pause signal to media player!",
 	})
 }
 
@@ -257,9 +436,29 @@ func handleInstall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleUninstallHooks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	_ = installer.UninstallClaudeHooks()
+	cwd, _ := os.Getwd()
+	_ = installer.UninstallAntigravityHooks(cwd)
+
+	// Also make sure stopped is set to true
+	_ = state.SetStopped(true)
+
+	logger.Info("[Hooks] All agent hooks removed and switchback paused.")
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "All hooks removed from Claude Code and Antigravity! System restored to standard behavior.",
+	})
+}
+
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	localAppData := os.Getenv("LOCALAPPDATA")
-	logPath := filepath.Join(localAppData, "focusmgr", "focusmgr.log")
+	logPath := filepath.Join(localAppData, "switchback", "switchback.log")
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -281,6 +480,433 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, filtered)
+}
+
+// Mobile Control Handlers
+
+func handleMobileInfo(w http.ResponseWriter, r *http.Request) {
+	lanIP := GetPrimaryLANIP()
+	allIPs := GetLocalIPs()
+	store, _ := state.Load()
+
+	// Parse port from host
+	host := r.Host
+	parts := strings.Split(host, ":")
+	port := "48123"
+	if len(parts) == 2 {
+		port = parts[1]
+	}
+
+	mobileURL := fmt.Sprintf("http://%s:%s/mobile.html", lanIP, port)
+
+	writeJSON(w, map[string]interface{}{
+		"lan_ip":                lanIP,
+		"all_ips":               allIPs,
+		"port":                  port,
+		"mobile_url":            mobileURL,
+		"mobile_control_active": store.MobileControlActive,
+		"current_status":        store.CurrentStatus,
+		"agent_title":           store.SelectedAgentTitle,
+		"work_title":            store.SelectedWorkTitle,
+	})
+}
+
+func handleMobileToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Active *bool `json:"active"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	store, _ := state.Load()
+	newState := !store.MobileControlActive
+	if req.Active != nil {
+		newState = *req.Active
+	}
+
+	_ = state.SetMobileControl(newState)
+	logger.Info("[MobileControl] Mode toggled from mobile/web: %v (PC focus switching suppressed: %v)", newState, newState)
+
+	writeJSON(w, map[string]interface{}{
+		"success":               true,
+		"mobile_control_active": newState,
+		"message":               fmt.Sprintf("Mobile Control is now %v", newState),
+	})
+}
+
+func handleMobileStatus(w http.ResponseWriter, r *http.Request) {
+	store, _ := state.Load()
+
+	writeJSON(w, map[string]interface{}{
+		"mobile_control_active": store.MobileControlActive,
+		"current_status":        store.CurrentStatus,
+		"agent_title":           store.SelectedAgentTitle,
+		"work_title":            store.SelectedWorkTitle,
+		"media_control":         store.MediaControl,
+		"media_paused":          store.MediaPaused,
+		"pending_approval":      store.PendingApproval,
+		"last_prompt":           store.LastMobilePrompt,
+		"gaming_mode":           store.GamingMode,
+		"fullscreen_guard":      store.FullscreenGuard,
+	})
+}
+
+func handleMobileReply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID       string `json:"id"`
+		Decision string `json:"decision"` // "allow", "deny", "option"
+		Answer   string `json:"answer"`
+		Index    int    `json:"index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	_ = state.SetApprovalReply(req.ID, req.Decision, req.Answer, req.Index)
+	logger.Info("[MobileControl] Approval replied from phone: ID=%s, Decision=%s, OptionIndex=%d, Answer=\"%s\"", req.ID, req.Decision, req.Index, req.Answer)
+
+	// Inject via Win32 keystrokes for terminal and IDE dialogs (Antigravity, Claude Code, Codex)
+	store, _ := state.Load()
+	targetHWND := win32.HWND(store.SelectedAgentHWND)
+	if targetHWND == 0 || !win32.IsWindowValid(targetHWND) {
+		found := win32.FindWindowByTitlePattern([]string{
+			"Antigravity", "Claude", "Cursor", "Visual Studio Code", "Code -", "Windsurf",
+		})
+		if found != 0 {
+			targetHWND = found
+		}
+	}
+
+	if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
+		go func(hwnd win32.HWND, dec, ans string, idx int, mobPrim bool) {
+			_ = win32.InjectApprovalToAgent(hwnd, dec, ans, idx, mobPrim)
+		}(targetHWND, req.Decision, req.Answer, req.Index, store.MobileControlActive)
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Response '%s' submitted to agent!", req.Decision),
+	})
+}
+
+func handleMobilePrompt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "Prompt cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	cleanPrompt := strings.TrimSpace(req.Prompt)
+	_ = state.SetLastMobilePrompt(cleanPrompt)
+	logger.Info("[MobileControl] Received new prompt from phone: \"%s\"", cleanPrompt)
+
+	_ = state.SetLatestAgentOutput(fmt.Sprintf("> User Prompt: %s\n\n⚡ Status: Prompt sent to Agent\nAgent is executing...", cleanPrompt))
+	_ = state.SetCurrentStatus("agent_working")
+
+	go func(prompt string) {
+		if err := DispatchAgentPrompt(prompt); err != nil {
+			logger.Error("[MobileControl] Failed to dispatch prompt: %v", err)
+		}
+	}(cleanPrompt)
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Prompt submitted directly to AI Agent!",
+		"prompt":  cleanPrompt,
+	})
+}
+
+func findAgentAPI() (string, []string) {
+	home, _ := os.UserHomeDir()
+
+	// 1. agentapi.bat in ~/.gemini/antigravity-ide/bin/
+	batPath := filepath.Join(home, ".gemini", "antigravity-ide", "bin", "agentapi.bat")
+	if _, err := os.Stat(batPath); err == nil {
+		return batPath, nil
+	}
+
+	// 2. language_server_windows_x64.exe directly
+	exeCandidates := []string{
+		`d:\Apps\Antigravity\Antigravity IDE\resources\app\extensions\antigravity\bin\language_server_windows_x64.exe`,
+		`c:\Apps\Antigravity\Antigravity IDE\resources\app\extensions\antigravity\bin\language_server_windows_x64.exe`,
+		filepath.Join(home, `AppData\Local\Programs\Antigravity\resources\app\extensions\antigravity\bin\language_server_windows_x64.exe`),
+		filepath.Join(home, `AppData\Local\Programs\Antigravity IDE\resources\app\extensions\antigravity\bin\language_server_windows_x64.exe`),
+	}
+	for _, c := range exeCandidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, []string{"agentapi"}
+		}
+	}
+
+	return "", nil
+}
+
+func resolveConversationID() string {
+	// 1. Check state store
+	if store, err := state.Load(); err == nil && store.ActiveConversationID != "" && store.ActiveConversationID != "default" {
+		return store.ActiveConversationID
+	}
+
+	// 2. Check the active SQLite conversation DB in ~/.gemini/antigravity-ide/conversations/
+	home, err := os.UserHomeDir()
+	if err == nil {
+		convDir := filepath.Join(home, ".gemini", "antigravity-ide", "conversations")
+		if entries, err := os.ReadDir(convDir); err == nil {
+			var newestID string
+			var newestTime time.Time
+			for _, entry := range entries {
+				name := entry.Name()
+				if strings.HasSuffix(name, ".db-wal") || strings.HasSuffix(name, ".db") {
+					info, err := entry.Info()
+					if err == nil && info.ModTime().After(newestTime) {
+						newestTime = info.ModTime()
+						id := strings.TrimSuffix(name, ".db-wal")
+						id = strings.TrimSuffix(id, ".db")
+						newestID = id
+					}
+				}
+			}
+			if newestID != "" {
+				return newestID
+			}
+		}
+	}
+
+	return ""
+}
+
+func DispatchAgentPrompt(prompt string) error {
+	convID := resolveConversationID()
+	prog, prefixArgs := findAgentAPI()
+
+	store, _ := state.Load()
+	targetHWND := win32.HWND(store.SelectedAgentHWND)
+	if targetHWND == 0 || !win32.IsWindowValid(targetHWND) {
+		targetHWND = win32.FindWindowByTitlePattern([]string{"Antigravity", "Claude", "Cursor", "Windsurf", "Visual Studio Code", "Terminal"})
+		if targetHWND != 0 {
+			_ = state.SetSelectedAgent(uintptr(targetHWND), win32.GetWindowTitle(targetHWND), "auto-detected")
+		}
+	}
+	if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
+		_ = win32.SetForegroundWindowWithBypass(targetHWND)
+	}
+
+	agentType := strings.ToLower(store.SelectedAgentType)
+	agentTitle := strings.ToLower(store.SelectedAgentTitle)
+	isAntigravity := agentType == "antigravity" || strings.Contains(agentTitle, "antigravity") || (agentType == "" && strings.Contains(agentTitle, "antigravity"))
+
+	// 1. Antigravity IDE: Native Language Server IPC (agentapi)
+	if isAntigravity && convID != "" && prog != "" {
+		args := append([]string{}, prefixArgs...)
+		args = append(args, "send-message", "--title=📱 Mobile Remote Command", convID, prompt)
+
+		cmd := exec.Command(prog, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		var outBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &outBuf
+
+		err := cmd.Run()
+		if err == nil {
+			logger.Info("[MobileControl] Successfully delivered prompt via native AgentAPI to conversation %s", convID)
+			return nil
+		}
+		logger.Warn("[MobileControl] AgentAPI send-message returned %v: %s", err, outBuf.String())
+	}
+
+	// 2. Claude Code: terminal window injection or headless CLI
+	if agentType == "claude-code" || strings.Contains(agentTitle, "claude") {
+		if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
+			logger.Info("[MobileControl] Dispatching prompt to Claude Code window HWND %d...", targetHWND)
+			return win32.InjectTextToAgent(targetHWND, prompt, store.MobileControlActive)
+		}
+		if claudePath, err := exec.LookPath("claude"); err == nil {
+			logger.Info("[MobileControl] Dispatching to headless Claude Code CLI: %s", claudePath)
+			cmd := exec.Command(claudePath, "-p", prompt)
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+			cwd, _ := os.Getwd()
+			cmd.Dir = cwd
+			return cmd.Start()
+		}
+	}
+
+	// 3. Cursor, Windsurf, VS Code (Cline/Roo/Copilot), JetBrains, Aider: Direct window injection
+	if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
+		logger.Info("[MobileControl] Dispatching prompt to %s window HWND %d...", store.SelectedAgentType, targetHWND)
+		return win32.InjectTextToAgent(targetHWND, prompt, store.MobileControlActive)
+	}
+
+	// 4. Fallback: Native AgentAPI if available
+	if convID != "" && prog != "" {
+		args := append([]string{}, prefixArgs...)
+		args = append(args, "send-message", "--title=📱 Mobile Remote Command", convID, prompt)
+
+		cmd := exec.Command(prog, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no agent dispatch mechanism available (AgentAPI, Claude CLI, or valid HWND)")
+}
+
+func handleMobileOutput(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var req struct {
+			Output string `json:"output"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Output != "" {
+			_ = state.SetLatestAgentOutput(req.Output)
+		}
+		writeJSON(w, map[string]interface{}{"success": true})
+		return
+	}
+
+	store, _ := state.Load()
+	output := strings.TrimSpace(store.LatestAgentOutput)
+	if output == "" {
+		output = "Ready. The agent's latest response will appear here."
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"output":         output,
+		"current_status": store.CurrentStatus,
+		"agent_title":    store.SelectedAgentTitle,
+	})
+}
+
+func handleMobileMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	store, _ := state.Load()
+	targetHwnd := win32.HWND(store.SelectedWorkHWND)
+	win32.ToggleMediaPlayback(targetHwnd)
+	logger.Info("[MobileControl] Toggled PC media playback from mobile on HWND %d", targetHwnd)
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Toggled PC Media Playback",
+	})
+}
+
+func handleMobileAsk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Title   string   `json:"title"`
+		Message string   `json:"message"`
+		Type    string   `json:"type"`
+		Options []string `json:"options"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Title == "" {
+		req.Title = "Agent Approval / Question"
+	}
+	if req.Message == "" {
+		req.Message = "The AI Agent is requesting your input on this action."
+	}
+	if len(req.Options) == 0 {
+		req.Options = []string{"Yes, proceed with action", "No, cancel"}
+	}
+
+	approval := &state.PendingApprovalData{
+		ID:        fmt.Sprintf("q_%d", time.Now().UnixNano()),
+		Title:     req.Title,
+		Message:   req.Message,
+		Type:      req.Type,
+		Options:   req.Options,
+		CreatedAt: time.Now(),
+	}
+
+	_ = state.SetPendingApproval(approval)
+	logger.Info("[MobileControl] Pushed question/approval to mobile: %s (\"%s\")", approval.Title, approval.Message)
+
+	writeJSON(w, map[string]interface{}{
+		"success":  true,
+		"approval": approval,
+	})
+}
+
+func handleMobileExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Command) == "" {
+		http.Error(w, "Command cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	cmdStr := strings.TrimSpace(req.Command)
+	logger.Info("[TaskRunner] Running command from mobile: %s", cmdStr)
+	_ = state.SetCurrentStatus("agent_working")
+	_ = state.SetLatestAgentOutput(fmt.Sprintf("⚡ Running: %s\nExecuting in workspace...\n", cmdStr))
+
+	go func(command string) {
+		cwd, _ := os.Getwd()
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		cmd.Dir = cwd
+
+		var outBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &outBuf
+
+		err := cmd.Run()
+		output := strings.TrimSpace(outBuf.String())
+		if output == "" {
+			if err != nil {
+				output = fmt.Sprintf("Command failed: %v", err)
+			} else {
+				output = "Command executed successfully (no output returned)."
+			}
+		}
+
+		statusHeader := "✔ Success"
+		if err != nil {
+			statusHeader = fmt.Sprintf("✖ Failed (exit code: %v)", err)
+		}
+
+		formatted := fmt.Sprintf("⚡ Command: %s\nStatus: %s\n\n--- Output ---\n%s", command, statusHeader, output)
+		_ = state.SetLatestAgentOutput(formatted)
+		_ = state.SetCurrentStatus("completed")
+		logger.Info("[TaskRunner] Finished execution of: %s", command)
+	}(cmdStr)
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Execution started: %s", cmdStr),
+		"command": cmdStr,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {

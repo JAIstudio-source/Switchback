@@ -1,0 +1,67 @@
+name: Build & Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run Tests
+        run: go test -v ./...
+
+      - name: Build SwitchBack Executable & Setup Installer
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -ldflags="-s -w -X 'main.version=${{ github.ref_name }}'" -o dist/switchback.exe ./cmd/switchback
+          
+          # Prepare assets for embedded standalone installer
+          Copy-Item dist/switchback.exe cmd/installer/switchback.exe -Force
+          Copy-Item icon.png cmd/installer/icon.png -Force
+          Copy-Item "Launch UI.bat" cmd/installer/Launch_UI.bat -Force
+
+          # Build Standalone Graphical Setup.exe
+          go build -ldflags="-H=windowsgui -s -w" -o dist/Setup.exe ./cmd/installer
+
+          Copy-Item "icon.png" -Destination "dist/icon.png" -Force
+          Copy-Item "Launch UI.bat" -Destination "dist/Launch UI.bat" -Force
+          Copy-Item "Install.bat" -Destination "dist/Install.bat" -Force
+          Copy-Item "Install-SwitchBack.ps1" -Destination "dist/Install-SwitchBack.ps1" -Force
+          Copy-Item "README.md" -Destination "dist/README.md" -Force
+
+      - name: Generate Checksums
+        working-directory: dist
+        run: |
+          Get-FileHash switchback.exe, Setup.exe -Algorithm SHA256 | Out-File "checksums.sha256"
+
+      - name: Create Release Zip Archive
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath "SwitchBack-Windows-x64.zip" -Force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/Setup.exe
+            dist/switchback.exe
+            SwitchBack-Windows-x64.zip
+            dist/checksums.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true

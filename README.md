@@ -1,6 +1,6 @@
-# focusmgr - Auto-Focus Window Manager for AI Agents
+# switchback - Auto-Focus Window Manager for AI Agents
 
-`focusmgr` is a lightweight, sub-50ms Windows window management CLI designed specifically to automate the **"Focus Loop"** for AI coding agents such as **Claude Code**, **OpenAI Codex**, and **Antigravity**.
+`switchback` is a lightweight, sub-50ms Windows window management CLI and GUI dashboard designed specifically to automate the **"Focus Loop"** for AI coding agents such as **Claude Code**, **OpenAI Codex**, and **Antigravity**.
 
 ---
 
@@ -38,35 +38,38 @@
 ## 🚀 Key Features
 
 * **Sub-50ms Hook Latency:** Starts and executes window switches almost instantaneously without lagging or stalling agent sessions.
-* **Fail-Safe Operation:** Always exits with code `0`. Any failure is recorded in `%LOCALAPPDATA%\focusmgr\focusmgr.log` without interfering with agent execution.
+* **Fail-Safe Operation:** Always exits with code `0`. Any failure is recorded in `%LOCALAPPDATA%\switchback\switchback.log` without interfering with agent execution.
 * **Windows Focus-Stealing Bypass:** Utilizes `AttachThreadInput`, temporary foreground lock timeout override (`SPI_SETFOREGROUNDLOCKTIMEOUT`), and simulated `VK_MENU` pulse to reliably bypass Windows 10/11 foreground restrictions.
 * **Parent Process Auto-Detection:** Automatically inspects ancestor process trees to find the terminal emulator or IDE window hosting the agent.
-* **Safe Concurrent Multi-Session Tracking:** State is stored atomically in `%LOCALAPPDATA%\focusmgr\state.json`.
+* **Safe Concurrent Multi-Session Tracking:** State is stored atomically in `%LOCALAPPDATA%\switchback\state.json`.
 
 ---
 
 ## 🛠️ Commands
 
 ```powershell
+# Launch the Pixel UI dashboard in browser
+switchback ui
+
 # Save foreground window and switch focus to agent
-focusmgr save-and-focus --session <session-id> [--agent claude-code|codex|antigravity]
+switchback save-and-focus --session <session-id> [--agent claude-code|codex|antigravity]
 
 # Restore focus to previous window when user prompts agent
-focusmgr restore --session <session-id> [--agent claude-code|codex|antigravity]
+switchback restore --session <session-id> [--agent claude-code|codex|antigravity]
 
 # Check active window, tracked sessions, and paths
-focusmgr status
+switchback status
 
 # Automatically configure hooks in installed agents
-focusmgr install
+switchback install
 
-# Interactive 3-second focus switch test
-focusmgr test-focus
+# Interactive focus switch test
+switchback test-focus
 ```
 
 ---
 
-## ⚙️ Configuration (`%LOCALAPPDATA%\focusmgr\config.json`)
+## ⚙️ Configuration (`%LOCALAPPDATA%\switchback\config.json`)
 
 ```json
 {
