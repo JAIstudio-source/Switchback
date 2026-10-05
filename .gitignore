@@ -53,6 +53,8 @@ scratch/
 _scratch/
 extras/_scratch/
 .system_generated/
+brag-output/
+test_destructive_sandbox_v2/
 
 # OS-generated files
 Thumbs.db

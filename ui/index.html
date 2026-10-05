@@ -32,6 +32,29 @@
     </div>
   </header>
 
+  <!-- Productivity HUD & Session Stats Bar -->
+  <div class="hud-stats-bar">
+    <div class="hud-stat-item">
+      <span class="hud-stat-label">⏱️ TIME SAVED TODAY:</span>
+      <span class="hud-stat-val highlight-emerald" id="hud-time-saved">0m 00s</span>
+    </div>
+    <div class="hud-stat-divider">|</div>
+    <div class="hud-stat-item">
+      <span class="hud-stat-label">⚡ TASKS COMPLETED:</span>
+      <span class="hud-stat-val highlight-gold" id="hud-tasks-count">0</span>
+    </div>
+    <div class="hud-stat-divider">|</div>
+    <div class="hud-stat-item">
+      <span class="hud-stat-label">🛡️ APPROVALS HANDLED:</span>
+      <span class="hud-stat-val highlight-cyan" id="hud-approvals-count">0</span>
+    </div>
+    <div class="hud-stat-divider">|</div>
+    <div class="hud-stat-item">
+      <span class="hud-stat-label">🎵 AUDIO:</span>
+      <button id="btn-test-chime" class="pixel-btn pixel-btn-tiny" title="Preview 8-bit sound chimes">TEST CHIME</button>
+    </div>
+  </div>
+
   <div class="container">
     <!-- SECTION 1: WINDOW TARGETS -->
     <section class="section-block">
@@ -169,6 +192,26 @@
           </div>
           <p class="mode-desc">Strict Notification Mode: Never steal window focus under any circumstance. Notifications only.</p>
         </label>
+
+        <!-- 6. Smart Auto-Approve Safe Actions -->
+        <label class="mode-card mode-card-highlight">
+          <div class="mode-header">
+            <span class="mode-icon">🛡️</span>
+            <span class="mode-title">AUTO-APPROVE SAFE ACTIONS</span>
+            <input type="checkbox" id="toggle-auto-approve" class="pixel-switch">
+          </div>
+          <p class="mode-desc">Silently auto-approves safe read-only commands (git status, grep, list, view) to prevent approval fatigue. Destructive commands always prompt.</p>
+        </label>
+
+        <!-- 7. Windows System Tray Mode -->
+        <label class="mode-card">
+          <div class="mode-header">
+            <span class="mode-icon">📥</span>
+            <span class="mode-title">RUN IN SYSTEM TRAY</span>
+            <input type="checkbox" id="toggle-keep-in-tray" class="pixel-switch">
+          </div>
+          <p class="mode-desc">Keep SwitchBack running in the Windows System Tray even when you close all browser tabs, allowing background hooks and phone control to stay active.</p>
+        </label>
       </div>
     </section>
 
@@ -256,7 +299,7 @@
           <div class="card-header">
             <span class="header-icon">⚙️</span>
             <h3>AGENT HOOK STATUS</h3>
-            <span class="badge-red" id="hooks-status-badge">INSTALLED</span>
+            <span class="badge-green" id="hooks-status-badge">INSTALLED</span>
           </div>
           <div class="card-body">
             <div class="agent-list">

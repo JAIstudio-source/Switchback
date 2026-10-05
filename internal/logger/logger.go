@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	logMu sync.Mutex
+	logMu       sync.Mutex
+	currentFile *os.File
+	currentPath string
 )
 
 func getLogFilePath() string {
@@ -23,29 +26,46 @@ func getLogFilePath() string {
 	return filepath.Join(dir, "switchback.log")
 }
 
-// Log writes a message with timestamp and level to the log file.
+func ensureLogFileLocked(logPath string) error {
+	if currentFile != nil && currentPath == logPath {
+		// Check rotation (if > 5MB)
+		if fi, err := currentFile.Stat(); err == nil && fi.Size() > 5*1024*1024 {
+			_ = currentFile.Close()
+			currentFile = nil
+			oldPath := logPath + ".old"
+			_ = os.Remove(oldPath)
+			_ = os.Rename(logPath, oldPath)
+		}
+	}
+
+	if currentFile == nil || currentPath != logPath {
+		if currentFile != nil {
+			_ = currentFile.Close()
+		}
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return err
+		}
+		currentFile = f
+		currentPath = logPath
+	}
+	return nil
+}
+
+// Log writes a message with timestamp and level to the persistent log file handle.
 func Log(level, format string, args ...interface{}) {
 	logMu.Lock()
 	defer logMu.Unlock()
 
 	logPath := getLogFilePath()
-
-	// Check rotation (if > 5MB)
-	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 5*1024*1024 {
-		oldPath := logPath + ".old"
-		_ = os.Remove(oldPath)
-		_ = os.Rename(logPath, oldPath)
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
+	if err := ensureLogFileLocked(logPath); err != nil {
 		return
 	}
-	defer f.Close()
 
 	msg := fmt.Sprintf(format, args...)
 	entry := fmt.Sprintf("[%s] [%s] %s\n", time.Now().Format("2006-01-02 15:04:05.000"), level, msg)
-	_, _ = f.WriteString(entry)
+	_, _ = currentFile.WriteString(entry)
+	_ = currentFile.Sync()
 }
 
 func Info(format string, args ...interface{}) {
@@ -64,41 +84,45 @@ func Error(format string, args ...interface{}) {
 	Log("ERROR", format, args...)
 }
 
-// GetRecentLogs returns the last N non-blank lines from focusmgr.log.
+// SanitizeLogLine redacts sensitive user paths before serving logs.
+func SanitizeLogLine(line string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		line = strings.ReplaceAll(line, home, "~")
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData != "" {
+		line = strings.ReplaceAll(line, localAppData, "%LOCALAPPDATA%")
+	}
+	return line
+}
+
+// GetRecentLogs returns the last N non-blank sanitized lines from switchback.log.
 func GetRecentLogs(maxLines int) []string {
 	logMu.Lock()
 	defer logMu.Unlock()
 
+	if currentFile != nil {
+		_ = currentFile.Sync()
+	}
+
 	logPath := getLogFilePath()
 	data, err := os.ReadFile(logPath)
 	if err != nil {
-		return nil
+		return []string{"[INFO] Log file created."}
 	}
 
-	lines := []string{}
-	rawLines := make([]string, 0)
-	var current []rune
-	for _, r := range string(data) {
-		if r == '\n' {
-			rawLines = append(rawLines, string(current))
-			current = nil
-		} else if r != '\r' {
-			current = append(current, r)
-		}
-	}
-	if len(current) > 0 {
-		rawLines = append(rawLines, string(current))
-	}
-
+	rawLines := strings.Split(string(data), "\n")
+	filtered := make([]string, 0, len(rawLines))
 	for _, l := range rawLines {
-		if len(l) > 0 {
-			lines = append(lines, l)
+		l = strings.TrimSpace(l)
+		if l != "" {
+			filtered = append(filtered, SanitizeLogLine(l))
 		}
 	}
 
-	if len(lines) <= maxLines {
-		return lines
+	if len(filtered) <= maxLines {
+		return filtered
 	}
-	return lines[len(lines)-maxLines:]
+	return filtered[len(filtered)-maxLines:]
 }
-

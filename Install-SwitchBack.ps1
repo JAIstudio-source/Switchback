@@ -153,6 +153,10 @@ Set-ItemProperty -Path $UninstallRegKey -Name "NoRepair" -Value 1 -Type DWord
 Write-Host "[*] Configuring agent hooks for Antigravity IDE and Claude Code..." -ForegroundColor Cyan
 & (Join-Path $InstallDir "switchback.exe") install | Out-Null
 
+# 9. Configure Windows Firewall Inbound Rule for Mobile Remote (LAN)
+Write-Host "[*] Configuring Windows Firewall rule for Mobile Controller..." -ForegroundColor Cyan
+& netsh.exe advfirewall firewall add rule name="SwitchBack Mobile Remote" dir=in action=allow protocol=TCP localport=48123-48127 profile=private,domain program=(Join-Path $InstallDir "switchback.exe") 2>$null | Out-Null
+
 Write-Host "`n=======================================================" -ForegroundColor Green
 Write-Host "       SwitchBack Installed Successfully (v$AppVersion)!       " -ForegroundColor Yellow
 Write-Host "=======================================================" -ForegroundColor Green

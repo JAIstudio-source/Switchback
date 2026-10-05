@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -52,6 +53,7 @@ var (
 	procProcess32NextW           = kernel32.NewProc("Process32NextW")
 	procGetShortPathNameW        = kernel32.NewProc("GetShortPathNameW")
 	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
+	procGlobalFree               = kernel32.NewProc("GlobalFree")
 	procGlobalLock               = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
 	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
@@ -61,6 +63,11 @@ var (
 	procEmptyClipboard   = user32.NewProc("EmptyClipboard")
 	procSetClipboardData = user32.NewProc("SetClipboardData")
 	procSetProcessDPIAware       = user32.NewProc("SetProcessDPIAware")
+	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+)
+
+const (
+	DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ^uintptr(3) // -4
 )
 
 // GetShortPath converts a path with spaces to an 8.3 short path without spaces.
@@ -81,12 +88,31 @@ func GetShortPath(path string) string {
 	return syscall.UTF16ToString(buf[:ret])
 }
 
+var (
+	lastEnsureDesktop time.Time
+	ensureDesktopMu   sync.Mutex
+	dpiAwareOnce      sync.Once
+)
+
 // EnsureDesktop attaches the current thread to the interactive desktop if needed.
-// Also ensures High-DPI Per-Monitor awareness is active for pixel-accurate coordinate clicking.
+// Also ensures High-DPI Per-Monitor V2 awareness is active for accurate window metrics.
 func EnsureDesktop() {
-	if procSetProcessDPIAware.Find() == nil {
-		procSetProcessDPIAware.Call()
+	dpiAwareOnce.Do(func() {
+		if procSetProcessDpiAwarenessContext.Find() == nil {
+			procSetProcessDpiAwarenessContext.Call(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+		} else if procSetProcessDPIAware.Find() == nil {
+			procSetProcessDPIAware.Call()
+		}
+	})
+
+	ensureDesktopMu.Lock()
+	defer ensureDesktopMu.Unlock()
+
+	if time.Since(lastEnsureDesktop) < 2*time.Second {
+		return
 	}
+	lastEnsureDesktop = time.Now()
+
 	desk, _, _ := procOpenInputDesktop.Call(0, 0, 0x0081)
 	if desk != 0 {
 		procSetThreadDesktop.Call(desk)
@@ -275,16 +301,41 @@ func IsFullscreenActive() bool {
 		}
 	}
 
-	// Check window style for WS_CAPTION (title bar)
+	// Check window style for WS_MAXIMIZE, WS_CAPTION, and WS_THICKFRAME
 	var style uint32
 	styleRet, _, _ := procGetWindowLongW.Call(uintptr(fg), uintptr(uint32(0xFFFFFFF0))) // GWL_STYLE (-16)
 	style = uint32(styleRet)
 
-	// If it has a standard title bar (WS_CAPTION), it's a maximized window, NOT full-screen media
+	const WS_MAXIMIZE = 0x01000000
+	const WS_THICKFRAME = 0x00040000
+
+	// If the window is a standard maximized window with caption or resize border, it's NOT a fullscreen video or exclusive game!
+	// (Common on laptops with auto-hide taskbar where RcWork == RcMonitor)
+	if (style&WS_MAXIMIZE) != 0 && ((style&WS_CAPTION) == WS_CAPTION || (style&WS_THICKFRAME) != 0) {
+		return false
+	}
+
+	// Taskbar position edge checks for Windows 10/11:
+	// Bottom taskbar
+	if mi.RcWork.Bottom < mi.RcMonitor.Bottom && wRect.Bottom <= mi.RcWork.Bottom+8 {
+		return false
+	}
+	// Top taskbar
+	if mi.RcWork.Top > mi.RcMonitor.Top && wRect.Top >= mi.RcWork.Top-8 {
+		return false
+	}
+	// Left taskbar
+	if mi.RcWork.Left > mi.RcMonitor.Left && wRect.Left >= mi.RcWork.Left-8 {
+		return false
+	}
+	// Right taskbar
+	if mi.RcWork.Right < mi.RcMonitor.Right && wRect.Right <= mi.RcWork.Right+8 {
+		return false
+	}
+
+	// Standard title bar check
 	if (style & WS_CAPTION) == WS_CAPTION {
-		if mi.RcWork.Bottom < mi.RcMonitor.Bottom && wRect.Bottom <= mi.RcWork.Bottom+8 {
-			return false
-		}
+		return false
 	}
 
 	return true
@@ -297,7 +348,6 @@ func IsMeetingActive() bool {
 		"zoom meeting", "zoom webinar",
 		"discord voice", "discord stream",
 		"microsoft teams meeting", "teams call",
-		"meet.google.com", "google meet",
 		"slack huddle", "webex meeting",
 	}
 	h := FindWindowByTitlePattern(meetingPatterns)
@@ -315,18 +365,20 @@ func SendMediaPlayPause() {
 }
 
 // ToggleMediaPlayback pulses the playback state for the target window or system media:
-// 1. Sends direct WM_APPCOMMAND to target window handle
-// 2. Broadcasts universal hardware VK_MEDIA_PLAY_PAUSE (0xB3) to Windows SMTC
+// If target window accepts WM_APPCOMMAND, we send it directly; otherwise we broadcast global hardware key.
 func ToggleMediaPlayback(targetHWND HWND) {
 	EnsureDesktop()
 
 	if targetHWND != 0 && IsWindowValid(targetHWND) {
-		procSendMessageW.Call(
+		ret, _, _ := procSendMessageW.Call(
 			uintptr(targetHWND),
 			WM_APPCOMMAND,
 			uintptr(targetHWND),
 			uintptr(APPCOMMAND_MEDIA_PLAY_PAUSE<<16),
 		)
+		if ret != 0 {
+			return
+		}
 	}
 
 	SendMediaPlayPause()
@@ -344,7 +396,6 @@ func IsWindowValid(hwnd HWND) bool {
 	if hwnd == 0 {
 		return false
 	}
-	EnsureDesktop()
 	ret, _, _ := procIsWindow.Call(uintptr(hwnd))
 	return ret != 0
 }
@@ -419,6 +470,7 @@ func SetClipboardText(text string) error {
 
 	ptr, _, _ := procGlobalLock.Call(hMem)
 	if ptr == 0 {
+		procGlobalFree.Call(hMem)
 		return fmt.Errorf("GlobalLock failed")
 	}
 
@@ -435,12 +487,17 @@ func SetClipboardText(text string) error {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !opened {
+		procGlobalFree.Call(hMem)
 		return fmt.Errorf("OpenClipboard failed")
 	}
 	defer procCloseClipboard.Call()
 
 	procEmptyClipboard.Call()
-	procSetClipboardData.Call(CF_UNICODETEXT, hMem)
+	ret, _, _ := procSetClipboardData.Call(CF_UNICODETEXT, hMem)
+	if ret == 0 {
+		procGlobalFree.Call(hMem)
+		return fmt.Errorf("SetClipboardData failed")
+	}
 	return nil
 }
 
@@ -499,10 +556,8 @@ func InjectTextToAgent(agentHWND HWND, text string, mobilePrimary bool) error {
 		SendKeyCombo(VK_CONTROL, VK_V)
 		time.Sleep(200 * time.Millisecond)
 
-		// 3. Submit prompt: Enter followed by Ctrl+Enter to cover all keybinding configurations
+		// 3. Submit prompt: send Enter
 		SendKey(VK_RETURN)
-		time.Sleep(50 * time.Millisecond)
-		SendKeyCombo(VK_CONTROL, VK_RETURN)
 	}
 
 	// 4. Window focus handling:
@@ -523,13 +578,33 @@ func InjectApprovalToAgent(agentHWND HWND, decision string, answer string, index
 	}
 	EnsureDesktop()
 	origFG := GetForegroundWindow()
+	title := strings.ToLower(GetWindowTitle(agentHWND))
+
+	// Only send raw terminal keystrokes (number keys, Y/N) to actual terminals or CLI sessions.
+	// In GUI IDEs (VS Code, JetBrains, Cursor, Windsurf, Antigravity), raw numbers/letters
+	// would type directly into active code editor files.
+	isTerminal := strings.Contains(title, "cmd") ||
+		strings.Contains(title, "powershell") ||
+		strings.Contains(title, "pwsh") ||
+		strings.Contains(title, "terminal") ||
+		strings.Contains(title, "bash") ||
+		strings.Contains(title, "conhost") ||
+		strings.Contains(title, "mintty") ||
+		strings.Contains(title, "alacritty") ||
+		strings.Contains(title, "wezterm")
+
+	if !isTerminal {
+		// For GUI IDEs, do not inject raw numbers into code editor buffers
+		return nil
+	}
+
 	_ = SetForegroundWindowWithBypass(agentHWND)
 	time.Sleep(200 * time.Millisecond)
 
 	lowerDecision := strings.ToLower(strings.TrimSpace(decision))
 
-	if index > 0 {
-		// Send number key (0x30 + index), Enter, Space, and Ctrl+Enter
+	if index >= 1 && index <= 9 {
+		// Send number key (0x30 + index) and Enter
 		SendKey(uintptr(0x30 + index))
 		time.Sleep(60 * time.Millisecond)
 		SendKey(VK_RETURN)

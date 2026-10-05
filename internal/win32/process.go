@@ -2,6 +2,7 @@ package win32
 
 import (
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -90,50 +91,89 @@ func GetCurrentPID() uint32 {
 	return uint32(pid)
 }
 
+var (
+	enumWindowsMu sync.Mutex
+
+	ancestorCb       uintptr
+	ancestorCbOnce   sync.Once
+	currentAncestors map[uint32]bool
+	ancestorProcNames map[uint32]string
+	ancestorFound    HWND
+
+	patternCb       uintptr
+	patternCbOnce   sync.Once
+	currentPatterns []string
+	patternFound    HWND
+
+	openWindowsCb       uintptr
+	openWindowsCbOnce   sync.Once
+	currentOpenWindows  *[]WindowInfo
+	openWindowsProcNames map[uint32]string
+)
+
 // FindAncestorWindow attempts to find the primary visible top-level window
 // belonging to any ancestor of the current process (e.g. Terminal, IDE).
 func FindAncestorWindow() HWND {
 	EnsureDesktop()
 	ancestors := GetProcessAncestors(0, 10)
 	procNames := GetProcessNameMap()
-	var found HWND
 
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		h := HWND(hwnd)
-		if !IsWindowVisible(h) {
-			return 1
-		}
-		_, pid := GetWindowThreadAndPID(h)
-		if ancestors[pid] {
-			pname := strings.ToLower(procNames[pid])
-			// Exclude Windows Explorer shell and system helpers
-			if pname == "explorer.exe" || pname == "switchback.exe" || pname == "svchost.exe" || pname == "dwm.exe" {
+	enumWindowsMu.Lock()
+	defer enumWindowsMu.Unlock()
+
+	currentAncestors = ancestors
+	ancestorProcNames = procNames
+	ancestorFound = 0
+
+	ancestorCbOnce.Do(func() {
+		ancestorCb = syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+			h := HWND(hwnd)
+			if !IsWindowVisible(h) {
 				return 1
 			}
+			_, pid := GetWindowThreadAndPID(h)
+			if currentAncestors != nil && currentAncestors[pid] {
+				pname := ""
+				if ancestorProcNames != nil {
+					pname = strings.ToLower(ancestorProcNames[pid])
+				}
+				// Exclude Windows Explorer shell and system helpers
+				if pname == "explorer.exe" || pname == "switchback.exe" || pname == "svchost.exe" || pname == "dwm.exe" {
+					return 1
+				}
 
-			title := strings.TrimSpace(GetWindowTitle(h))
-			if title != "" && title != "Program Manager" && title != "Windows Input Experience" && title != "Settings" {
-				titleLower := strings.ToLower(title)
-				// Ensure this ancestor window is an actual agent IDE or terminal
-				if strings.Contains(pname, "antigravity") || strings.Contains(titleLower, "antigravity") ||
-					strings.Contains(pname, "claude") || strings.Contains(titleLower, "claude") ||
-					strings.Contains(pname, "code") || strings.Contains(titleLower, "visual studio code") ||
-					strings.Contains(pname, "cursor") || strings.Contains(titleLower, "cursor") ||
-					strings.Contains(pname, "windsurf") || strings.Contains(titleLower, "windsurf") ||
-					strings.Contains(pname, "windowsterminal") || strings.Contains(pname, "powershell") ||
-					strings.Contains(pname, "pwsh") || strings.Contains(pname, "cmd") ||
-					strings.Contains(pname, "conhost") || strings.Contains(pname, "alacritty") ||
-					strings.Contains(pname, "wezterm") || strings.Contains(titleLower, "terminal") {
-					found = h
-					return 0
+				title := strings.TrimSpace(GetWindowTitle(h))
+				if title != "" && title != "Program Manager" && title != "Windows Input Experience" && title != "Settings" {
+					titleLower := strings.ToLower(title)
+					// Ensure this ancestor window is an actual agent IDE or terminal
+					if strings.Contains(pname, "antigravity") || strings.Contains(titleLower, "antigravity") ||
+						strings.Contains(pname, "claude") || strings.Contains(titleLower, "claude") ||
+						pname == "code.exe" || strings.HasSuffix(pname, "\\code.exe") || strings.Contains(titleLower, "visual studio code") ||
+						strings.Contains(pname, "cursor") || strings.Contains(titleLower, "cursor") ||
+						strings.Contains(pname, "windsurf") || strings.Contains(titleLower, "windsurf") ||
+						strings.Contains(pname, "windowsterminal") || strings.Contains(pname, "powershell") ||
+						strings.Contains(pname, "pwsh") || strings.Contains(pname, "cmd") ||
+						strings.Contains(pname, "conhost") || strings.Contains(pname, "alacritty") ||
+						strings.Contains(pname, "wezterm") || strings.Contains(pname, "mintty") ||
+						strings.Contains(pname, "bash") || strings.Contains(pname, "devenv") ||
+						strings.Contains(pname, "idea64") || strings.Contains(pname, "pycharm64") ||
+						strings.Contains(pname, "webstorm64") || strings.Contains(pname, "rider64") ||
+						strings.Contains(pname, "clion64") || strings.Contains(pname, "goland64") ||
+						strings.Contains(titleLower, "terminal") {
+						ancestorFound = h
+						return 0
+					}
 				}
 			}
-		}
-		return 1
+			return 1
+		})
 	})
 
-	procEnumWindows.Call(cb, 0)
-	return found
+	procEnumWindows.Call(ancestorCb, 0)
+	res := ancestorFound
+	currentAncestors = nil
+	ancestorProcNames = nil
+	return res
 }
 
 // FindWindowByTitlePattern searches visible top-level windows for one matching any pattern.
@@ -142,29 +182,40 @@ func FindWindowByTitlePattern(patterns []string) HWND {
 	if len(patterns) == 0 {
 		return 0
 	}
-	var found HWND
 
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		h := HWND(hwnd)
-		if !IsWindowVisible(h) {
-			return 1
-		}
-		title := strings.ToLower(GetWindowTitle(h))
-		if title == "" {
-			return 1
-		}
-		for _, pat := range patterns {
-			p := strings.ToLower(strings.TrimSpace(pat))
-			if p != "" && strings.Contains(title, p) {
-				found = h
-				return 0
+	enumWindowsMu.Lock()
+	defer enumWindowsMu.Unlock()
+
+	patternFound = 0
+	currentPatterns = patterns
+
+	patternCbOnce.Do(func() {
+		patternCb = syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+			h := HWND(hwnd)
+			if !IsWindowVisible(h) {
+				return 1
 			}
-		}
-		return 1
+			title := strings.ToLower(GetWindowTitle(h))
+			if title == "" {
+				return 1
+			}
+			if currentPatterns != nil {
+				for _, pat := range currentPatterns {
+					p := strings.ToLower(strings.TrimSpace(pat))
+					if p != "" && strings.Contains(title, p) {
+						patternFound = h
+						return 0
+					}
+				}
+			}
+			return 1
+		})
 	})
 
-	procEnumWindows.Call(cb, 0)
-	return found
+	procEnumWindows.Call(patternCb, 0)
+	res := patternFound
+	currentPatterns = nil
+	return res
 }
 
 // GetOpenWindows returns all active, visible top-level application windows.
@@ -173,69 +224,84 @@ func GetOpenWindows() []WindowInfo {
 	procNames := GetProcessNameMap()
 	var windowsList []WindowInfo
 
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		h := HWND(hwnd)
-		if !IsWindowVisible(h) {
+	enumWindowsMu.Lock()
+	defer enumWindowsMu.Unlock()
+
+	currentOpenWindows = &windowsList
+	openWindowsProcNames = procNames
+
+	openWindowsCbOnce.Do(func() {
+		openWindowsCb = syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+			h := HWND(hwnd)
+			if !IsWindowVisible(h) {
+				return 1
+			}
+
+			title := strings.TrimSpace(GetWindowTitle(h))
+			if title == "" {
+				return 1
+			}
+
+			// Skip Windows internal helper windows
+			if title == "Program Manager" || title == "Windows Input Experience" || title == "Settings" {
+				return 1
+			}
+
+			_, pid := GetWindowThreadAndPID(h)
+			pname := ""
+			if openWindowsProcNames != nil {
+				pname = openWindowsProcNames[pid]
+			}
+
+			// Check if it's an AI agent
+			isAgent := false
+			agentType := ""
+			titleLower := strings.ToLower(title)
+			pnameLower := strings.ToLower(pname)
+
+			if strings.Contains(titleLower, "antigravity") || strings.Contains(pnameLower, "antigravity") {
+				isAgent = true
+				agentType = "antigravity"
+			} else if strings.Contains(titleLower, "claude") || strings.Contains(pnameLower, "claude") {
+				isAgent = true
+				agentType = "claude-code"
+			} else if strings.Contains(titleLower, "cursor") || strings.Contains(pnameLower, "cursor") {
+				isAgent = true
+				agentType = "cursor"
+			} else if strings.Contains(titleLower, "windsurf") || strings.Contains(pnameLower, "windsurf") {
+				isAgent = true
+				agentType = "windsurf"
+			} else if strings.Contains(titleLower, "aider") {
+				isAgent = true
+				agentType = "aider"
+			} else if strings.Contains(pnameLower, "idea64") || strings.Contains(pnameLower, "pycharm64") || strings.Contains(pnameLower, "webstorm64") || strings.Contains(pnameLower, "rider64") || strings.Contains(pnameLower, "clion64") {
+				isAgent = true
+				agentType = "jetbrains"
+			} else if strings.Contains(titleLower, "visual studio code") || pnameLower == "code.exe" || strings.HasSuffix(pnameLower, "\\code.exe") {
+				isAgent = true
+				agentType = "vscode-cline"
+			} else if strings.Contains(titleLower, "codex") || strings.Contains(pnameLower, "codex") {
+				isAgent = true
+				agentType = "codex"
+			}
+
+			if currentOpenWindows != nil {
+				*currentOpenWindows = append(*currentOpenWindows, WindowInfo{
+					HWND:        uintptr(h),
+					Title:       title,
+					ProcessName: pname,
+					PID:         pid,
+					IsAgent:     isAgent,
+					AgentType:   agentType,
+				})
+			}
+
 			return 1
-		}
-
-		title := strings.TrimSpace(GetWindowTitle(h))
-		if title == "" {
-			return 1
-		}
-
-		// Skip Windows internal helper windows
-		if title == "Program Manager" || title == "Windows Input Experience" || title == "Settings" {
-			return 1
-		}
-
-		_, pid := GetWindowThreadAndPID(h)
-		pname := procNames[pid]
-
-		// Check if it's an AI agent
-		isAgent := false
-		agentType := ""
-		titleLower := strings.ToLower(title)
-		pnameLower := strings.ToLower(pname)
-
-		if strings.Contains(titleLower, "antigravity") || strings.Contains(pnameLower, "antigravity") {
-			isAgent = true
-			agentType = "antigravity"
-		} else if strings.Contains(titleLower, "claude") || strings.Contains(pnameLower, "claude") {
-			isAgent = true
-			agentType = "claude-code"
-		} else if strings.Contains(titleLower, "cursor") || strings.Contains(pnameLower, "cursor") {
-			isAgent = true
-			agentType = "cursor"
-		} else if strings.Contains(titleLower, "windsurf") || strings.Contains(pnameLower, "windsurf") {
-			isAgent = true
-			agentType = "windsurf"
-		} else if strings.Contains(titleLower, "aider") {
-			isAgent = true
-			agentType = "aider"
-		} else if strings.Contains(pnameLower, "idea64") || strings.Contains(pnameLower, "pycharm64") || strings.Contains(pnameLower, "webstorm64") || strings.Contains(pnameLower, "rider64") || strings.Contains(pnameLower, "clion64") {
-			isAgent = true
-			agentType = "jetbrains"
-		} else if strings.Contains(titleLower, "visual studio code") || strings.Contains(pnameLower, "code.exe") {
-			isAgent = true
-			agentType = "vscode-cline"
-		} else if strings.Contains(titleLower, "codex") || strings.Contains(pnameLower, "codex") {
-			isAgent = true
-			agentType = "codex"
-		}
-
-		windowsList = append(windowsList, WindowInfo{
-			HWND:        uintptr(h),
-			Title:       title,
-			ProcessName: pname,
-			PID:         pid,
-			IsAgent:     isAgent,
-			AgentType:   agentType,
 		})
-
-		return 1
 	})
 
-	procEnumWindows.Call(cb, 0)
+	procEnumWindows.Call(openWindowsCb, 0)
+	currentOpenWindows = nil
+	openWindowsProcNames = nil
 	return windowsList
 }

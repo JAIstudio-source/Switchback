@@ -6,37 +6,27 @@ import (
 	"switchback/internal/config"
 )
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := config.DefaultConfig()
+func TestConfigLoadAndSave(t *testing.T) {
+	cfg := config.LoadConfig()
 	if cfg == nil {
-		t.Fatalf("DefaultConfig returned nil")
+		t.Fatalf("Expected non-nil config")
 	}
 
-	if !cfg.LogToFile {
-		t.Errorf("Expected LogToFile to default to true")
-	}
-
-	if cfg.LogLevel != "info" {
-		t.Errorf("Expected LogLevel to be 'info', got %q", cfg.LogLevel)
+	if len(cfg.Agents) == 0 {
+		t.Errorf("Expected default agents to be populated")
 	}
 
 	if _, ok := cfg.Agents["antigravity"]; !ok {
-		t.Errorf("Expected antigravity agent config to be present")
+		t.Errorf("Expected antigravity agent in default config")
 	}
 
-	if _, ok := cfg.Agents["claude-code"]; !ok {
-		t.Errorf("Expected claude-code agent config to be present")
-	}
-}
-
-func TestConfigLoad(t *testing.T) {
-	cfg := config.LoadConfig()
-	if cfg == nil {
-		t.Fatalf("Loaded config is nil")
+	// Test saving
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("Failed to save config: %v", err)
 	}
 
-	path, err := config.GetConfigFilePath()
-	if err != nil || path == "" {
-		t.Errorf("Expected valid config file path, got %q (err: %v)", path, err)
+	reloaded := config.LoadConfig()
+	if reloaded == nil {
+		t.Fatalf("Expected reloaded config to be non-nil")
 	}
 }

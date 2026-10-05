@@ -71,6 +71,9 @@ if (Test-Path $RegKey) {
     Remove-Item $RegKey -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Clean up Windows Firewall Inbound Rule
+& netsh.exe advfirewall firewall delete rule name="SwitchBack Mobile Remote" 2>$null | Out-Null
+
 # 6. Delete Installed Directory
 Write-Host "[6/6] Removing application files..." -ForegroundColor Cyan
 if (Test-Path $InstallDir) {

@@ -2,10 +2,24 @@
 // SWITCHBACK MOBILE REMOTE CONTROLLER SCRIPT
 // ==========================================================================
 
+const urlParams = new URLSearchParams(window.location.search);
+let sessionToken = urlParams.get('token') || localStorage.getItem('switchback_token') || '';
+if (urlParams.get('token')) {
+  localStorage.setItem('switchback_token', urlParams.get('token'));
+}
+
+function getAuthHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (sessionToken) {
+    headers['X-Switchback-Token'] = sessionToken;
+  }
+  return headers;
+}
+
 class MobileFeedback {
   constructor() {
-    this.hapticsEnabled = true;
-    this.soundEnabled = true;
+    this.hapticsEnabled = localStorage.getItem('switchback_m_haptics') !== 'false';
+    this.soundEnabled = localStorage.getItem('switchback_m_sound') !== 'false';
     this.ctx = null;
   }
 
@@ -13,6 +27,9 @@ class MobileFeedback {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AudioCtx();
+    }
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
     }
   }
 
@@ -43,7 +60,44 @@ class MobileFeedback {
 
   alertNotification() {
     this.vibrate([150, 100, 200, 100, 250]);
-    this.playBeep(880, 0.15);
+    if (!this.soundEnabled) return;
+    this.initAudio();
+    try {
+      const notes = [659, 880, 1174];
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.08);
+        gain.gain.setValueAtTime(0.15, this.ctx.currentTime + idx * 0.08);
+        gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.08 + 0.1);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.ctx.currentTime + idx * 0.08);
+        osc.stop(this.ctx.currentTime + idx * 0.08 + 0.1);
+      });
+    } catch (e) {}
+  }
+
+  fanfare() {
+    this.vibrate([60, 40, 80]);
+    if (!this.soundEnabled) return;
+    this.initAudio();
+    try {
+      const notes = [523, 659, 784, 1046];
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime + idx * 0.07);
+        gain.gain.setValueAtTime(0.15, this.ctx.currentTime + idx * 0.07);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + idx * 0.07 + 0.12);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(this.ctx.currentTime + idx * 0.07);
+        osc.stop(this.ctx.currentTime + idx * 0.07 + 0.12);
+      });
+    } catch (e) {}
   }
 
   success() {
@@ -91,12 +145,24 @@ function escapeHtml(str) {
   }[tag] || tag));
 }
 
+let lastMobileStatus = null;
+
 // Fetch Mobile Live Status
 async function fetchMobileStatus() {
   try {
     const res = await fetch('/api/mobile/status');
     if (!res.ok) return;
     const data = await res.json();
+
+    // Trigger audio/haptic feedback on status transitions
+    if (lastMobileStatus && lastMobileStatus !== data.current_status) {
+      if (data.current_status === 'completed') {
+        feedback.fanfare();
+      } else if (data.current_status === 'permission_needed') {
+        feedback.alertNotification();
+      }
+    }
+    lastMobileStatus = data.current_status;
 
     // Update status badge
     if (data.current_status === 'agent_working') {
@@ -111,6 +177,23 @@ async function fetchMobileStatus() {
     } else {
       statusBadge.textContent = '● IDLE';
       statusBadge.style.background = 'var(--pixel-emerald)';
+    }
+
+    // Update Mini-HUD Stats
+    const mTimeSaved = document.getElementById('m-time-saved');
+    const mTasksCount = document.getElementById('m-tasks-count');
+    const mApprovalsCount = document.getElementById('m-approvals-count');
+
+    if (mTimeSaved && data.total_time_saved_secs !== undefined) {
+      const mins = Math.floor(data.total_time_saved_secs / 60);
+      const secs = data.total_time_saved_secs % 60;
+      mTimeSaved.textContent = `${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+    }
+    if (mTasksCount && data.total_tasks_completed !== undefined) {
+      mTasksCount.textContent = data.total_tasks_completed;
+    }
+    if (mApprovalsCount && data.total_approvals_handled !== undefined) {
+      mApprovalsCount.textContent = data.total_approvals_handled;
     }
 
     // Update Target / Agent names
@@ -129,7 +212,7 @@ async function fetchMobileStatus() {
       approvalTitle.textContent = app.title || 'Action Approval Needed';
       approvalDesc.textContent = app.message || 'Agent requested confirmation.';
 
-      // Render options
+      // Render options & snippet
       if (app.id !== lastSeenApprovalId) {
         lastSeenApprovalId = app.id;
         feedback.alertNotification();
@@ -145,6 +228,25 @@ async function fetchMobileStatus() {
 
 function renderApprovalButtons(app) {
   approvalOptions.innerHTML = '';
+
+  // Render context snippet if provided
+  const snippetBox = document.getElementById('m-approval-snippet-box');
+  if (snippetBox) {
+    if (app.context_snippet) {
+      const dangerClass = app.danger_level === 'danger' ? 'danger-badge' : (app.danger_level === 'warning' ? 'warning-badge' : 'safe-badge');
+      const dangerText = app.danger_level === 'danger' ? '⚠️ HIGH RISK' : (app.danger_level === 'warning' ? '⚡ ATTENTION' : '🛡️ SAFE');
+      snippetBox.innerHTML = `
+        <div class="snippet-header">
+          <span class="tool-tag">${escapeHtml(app.tool_name || 'Action')}</span>
+          <span class="danger-tag ${dangerClass}">${dangerText}</span>
+        </div>
+        <pre class="snippet-code"><code>${escapeHtml(app.context_snippet)}</code></pre>
+      `;
+      snippetBox.style.display = 'block';
+    } else {
+      snippetBox.style.display = 'none';
+    }
+  }
 
   if (Array.isArray(app.options) && app.options.length > 0) {
     app.options.forEach((optText, index) => {
@@ -165,7 +267,7 @@ function renderApprovalButtons(app) {
     const btnApprove = document.createElement('button');
     btnApprove.className = 'm-btn m-btn-approve w-100';
     btnApprove.textContent = '✔ APPROVE / ALLOW';
-    btnApprove.addEventListener('click', () => sendApprovalReply(app.id, 'allow', 'Allowed by user', 1));
+    btnApprove.addEventListener('click', () => sendApprovalReply(app.id, 'allow', 'Allowed by user', 0));
 
     const btnDeny = document.createElement('button');
     btnDeny.className = 'm-btn m-btn-deny w-100';
@@ -186,7 +288,7 @@ async function sendApprovalReply(id, decision, answer, index = 0) {
   try {
     await fetch('/api/mobile/reply', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ id, decision, answer, index })
     });
     fetchMobileStatus();
@@ -206,7 +308,7 @@ async function sendPrompt() {
   try {
     const res = await fetch('/api/mobile/prompt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ prompt })
     });
     if (res.ok) {
@@ -229,7 +331,10 @@ async function toggleMedia() {
   addLog('Toggled PC Media Playback', 'info');
 
   try {
-    await fetch('/api/mobile/media', { method: 'POST' });
+    await fetch('/api/mobile/media', {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
   } catch (e) {}
 }
 
@@ -242,7 +347,7 @@ async function togglePrimaryMode() {
   try {
     await fetch('/api/mobile/toggle', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ active })
     });
   } catch (e) {}
@@ -261,10 +366,11 @@ async function runDevCommand(command) {
   try {
     const res = await fetch('/api/mobile/execute', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ command: cmd })
     });
     const data = await res.json();
+    addLog(`Task: ${data.message || cmd}`, data.success ? 'success' : 'warn');
     fetchMobileStatus();
     fetchAgentOutput();
   } catch (e) {
@@ -302,21 +408,30 @@ function setupEvents() {
   const btnHaptics = document.getElementById('btn-haptics-toggle');
   const hapticText = document.getElementById('haptic-text');
   const hapticIcon = document.getElementById('haptic-icon');
-  btnHaptics.addEventListener('click', () => {
-    feedback.hapticsEnabled = !feedback.hapticsEnabled;
-    hapticText.textContent = feedback.hapticsEnabled ? 'ON' : 'OFF';
-    hapticIcon.textContent = feedback.hapticsEnabled ? '📳' : '📴';
-    if (feedback.hapticsEnabled) feedback.vibrate([50]);
-  });
+  if (btnHaptics) {
+    if (hapticText) hapticText.textContent = feedback.hapticsEnabled ? 'ON' : 'OFF';
+    if (hapticIcon) hapticIcon.textContent = feedback.hapticsEnabled ? '📳' : '📴';
+    btnHaptics.addEventListener('click', () => {
+      feedback.hapticsEnabled = !feedback.hapticsEnabled;
+      localStorage.setItem('switchback_m_haptics', feedback.hapticsEnabled);
+      if (hapticText) hapticText.textContent = feedback.hapticsEnabled ? 'ON' : 'OFF';
+      if (hapticIcon) hapticIcon.textContent = feedback.hapticsEnabled ? '📳' : '📴';
+      if (feedback.hapticsEnabled) feedback.vibrate([50]);
+    });
+  }
 
   // Sound Toggle
   const btnSound = document.getElementById('btn-sound-toggle');
   const soundIcon = document.getElementById('sound-icon');
-  btnSound.addEventListener('click', () => {
-    feedback.soundEnabled = !feedback.soundEnabled;
-    soundIcon.textContent = feedback.soundEnabled ? '🔊' : '🔇';
-    if (feedback.soundEnabled) feedback.playBeep(520);
-  });
+  if (btnSound) {
+    if (soundIcon) soundIcon.textContent = feedback.soundEnabled ? '🔊' : '🔇';
+    btnSound.addEventListener('click', () => {
+      feedback.soundEnabled = !feedback.soundEnabled;
+      localStorage.setItem('switchback_m_sound', feedback.soundEnabled);
+      if (soundIcon) soundIcon.textContent = feedback.soundEnabled ? '🔊' : '🔇';
+      if (feedback.soundEnabled) feedback.playBeep(520);
+    });
+  }
 
   // Media Button
   if (btnMedia) btnMedia.addEventListener('click', toggleMedia);
@@ -410,7 +525,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(fetchAgentOutput, 1500);
 
   // Mobile Client Session Heartbeat
-  const mobileClientId = 'mob_' + Math.random().toString(36).substr(2, 9);
+  const mobileClientId = 'mob_' + Math.random().toString(36).substring(2, 11);
   function sendMobileHeartbeat() {
     fetch('/api/heartbeat?client=' + mobileClientId, { method: 'POST' }).catch(() => {});
   }

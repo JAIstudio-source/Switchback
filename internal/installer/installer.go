@@ -83,27 +83,35 @@ func InstallClaudeHooks(switchbackPath string) error {
 	return os.WriteFile(settingsPath, updated, 0644)
 }
 
-// InstallAntigravityHooks configures hooks in ~/.gemini/config/hooks.json (global) or local workspace
+// InstallAntigravityHooks configures hooks strictly in local workspace .agents/hooks.json
 func InstallAntigravityHooks(switchbackPath string, workspaceDir string) error {
 	targetPaths := []string{}
 
-	home, err := os.UserHomeDir()
-	if err == nil {
-		targetPaths = append(targetPaths, filepath.Join(home, ".gemini", "config", "hooks.json"))
-	} else if workspaceDir != "" {
+	// SwitchBack hooks are strictly localized to the workspace and NEVER hardcoded into global system files
+	if workspaceDir != "" {
 		targetPaths = append(targetPaths, filepath.Join(workspaceDir, ".agents", "hooks.json"))
 	}
 
-	// On Windows, Antigravity executes commands via cmd /c. If the command string contains
-	// escaped quotes, cmd.exe fails with "'\"...\"' is not recognized as an internal or external command".
-	// Therefore, we convert any path with spaces to an 8.3 short path and omit outer quotes.
 	cleanPath := switchbackPath
 	if strings.Contains(cleanPath, " ") {
-		cleanPath = win32.GetShortPath(cleanPath)
+		short := win32.GetShortPath(cleanPath)
+		if !strings.Contains(short, " ") {
+			cleanPath = short
+		}
 	}
-	stopCmd := fmt.Sprintf("%s hook --event Stop --agent antigravity", cleanPath)
-	preCmd := fmt.Sprintf("%s hook --event PreInvocation --agent antigravity", cleanPath)
-	notifyCmd := fmt.Sprintf("%s hook --event Notification --agent antigravity", cleanPath)
+
+	var stopCmd, preCmd, preToolCmd, postToolCmd string
+	if strings.Contains(cleanPath, " ") {
+		stopCmd = fmt.Sprintf("\"%s\" hook --event Stop --agent antigravity", cleanPath)
+		preCmd = fmt.Sprintf("\"%s\" hook --event PreInvocation --agent antigravity", cleanPath)
+		preToolCmd = fmt.Sprintf("\"%s\" hook --event PreToolUse --agent antigravity", cleanPath)
+		postToolCmd = fmt.Sprintf("\"%s\" hook --event PostToolUse --agent antigravity", cleanPath)
+	} else {
+		stopCmd = fmt.Sprintf("%s hook --event Stop --agent antigravity", cleanPath)
+		preCmd = fmt.Sprintf("%s hook --event PreInvocation --agent antigravity", cleanPath)
+		preToolCmd = fmt.Sprintf("%s hook --event PreToolUse --agent antigravity", cleanPath)
+		postToolCmd = fmt.Sprintf("%s hook --event PostToolUse --agent antigravity", cleanPath)
+	}
 
 	type HookHandler struct {
 		Type    string `json:"type"`
@@ -117,9 +125,11 @@ func InstallAntigravityHooks(switchbackPath string, workspaceDir string) error {
 	}
 
 	type HookGroup struct {
-		PreToolUse    []MatcherGroup `json:"PreToolUse,omitempty"`
-		PreInvocation []HookHandler  `json:"PreInvocation,omitempty"`
-		Stop          []HookHandler  `json:"Stop,omitempty"`
+		PreToolUse     []MatcherGroup `json:"PreToolUse,omitempty"`
+		PostToolUse    []MatcherGroup `json:"PostToolUse,omitempty"`
+		PreInvocation  []HookHandler  `json:"PreInvocation,omitempty"`
+		PostInvocation []HookHandler  `json:"PostInvocation,omitempty"`
+		Stop           []HookHandler  `json:"Stop,omitempty"`
 	}
 
 	for _, p := range targetPaths {
@@ -135,19 +145,38 @@ func InstallAntigravityHooks(switchbackPath string, workspaceDir string) error {
 		}
 
 		// Clean up any obsolete incorrect "hooks" array or old "focusmgr" group if present
-		delete(rootMap, "hooks")
+		if hooksVal, ok := rootMap["hooks"]; ok {
+			b, _ := json.Marshal(hooksVal)
+			s := string(b)
+			if strings.Contains(s, "switchback") || strings.Contains(s, "focusmgr") {
+				delete(rootMap, "hooks")
+			}
+		}
 		delete(rootMap, "focusmgr")
 
-		// Configure named switchback hook group
+		// Configure complete Antigravity hook lifecycle:
+		// PreInvocation (prompt start) -> PreToolUse -> PostToolUse -> PostInvocation (prompt end)
 		rootMap["switchback"] = HookGroup{
 			PreToolUse: []MatcherGroup{
 				{
-					Matcher: "ask_question",
+					Matcher: "*",
 					Hooks: []HookHandler{
 						{
 							Type:    "command",
-							Command: notifyCmd,
-							Timeout: 15,
+							Command: preToolCmd,
+							Timeout: 10,
+						},
+					},
+				},
+			},
+			PostToolUse: []MatcherGroup{
+				{
+					Matcher: "*",
+					Hooks: []HookHandler{
+						{
+							Type:    "command",
+							Command: postToolCmd,
+							Timeout: 10,
 						},
 					},
 				},
@@ -156,14 +185,21 @@ func InstallAntigravityHooks(switchbackPath string, workspaceDir string) error {
 				{
 					Type:    "command",
 					Command: preCmd,
-					Timeout: 15,
+					Timeout: 30,
+				},
+			},
+			PostInvocation: []HookHandler{
+				{
+					Type:    "command",
+					Command: stopCmd,
+					Timeout: 30,
 				},
 			},
 			Stop: []HookHandler{
 				{
 					Type:    "command",
 					Command: stopCmd,
-					Timeout: 15,
+					Timeout: 30,
 				},
 			},
 		}
@@ -274,7 +310,13 @@ func UninstallAntigravityHooks(workspaceDir string) error {
 
 		delete(rootMap, "switchback")
 		delete(rootMap, "focusmgr")
-		delete(rootMap, "hooks")
+		if hooksVal, ok := rootMap["hooks"]; ok {
+			b, _ := json.Marshal(hooksVal)
+			s := string(b)
+			if strings.Contains(s, "switchback") || strings.Contains(s, "focusmgr") {
+				delete(rootMap, "hooks")
+			}
+		}
 
 		out, err := json.MarshalIndent(rootMap, "", "  ")
 		if err == nil {
@@ -320,59 +362,8 @@ func CheckHooksInstalled(workspaceDir string) (bool, bool) {
 	return antigravityInstalled, claudeInstalled
 }
 
-// EnsureIDEKeybindings configures keybindings for Antigravity IDE and VS Code to ensure chat focus works seamlessly
+// EnsureIDEKeybindings is a no-op to ensure no system files or IDE configurations are modified outside the app.
 func EnsureIDEKeybindings() error {
-	appdata := os.Getenv("APPDATA")
-	if appdata == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		appdata = filepath.Join(home, "AppData", "Roaming")
-	}
-
-	targets := []string{
-		filepath.Join(appdata, "Antigravity IDE", "User", "keybindings.json"),
-		filepath.Join(appdata, "Antigravity", "User", "keybindings.json"),
-		filepath.Join(appdata, "Code", "User", "keybindings.json"),
-	}
-
-	for _, target := range targets {
-		dir := filepath.Dir(target)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			var entries []map[string]interface{}
-			data, err := os.ReadFile(target)
-			if err == nil && len(data) > 0 {
-				_ = json.Unmarshal(data, &entries)
-			}
-			if entries == nil {
-				entries = make([]map[string]interface{}, 0)
-			}
-
-			hasBinding := false
-			for _, e := range entries {
-				if cmd, ok := e["command"].(string); ok && (cmd == "workbench.action.chat.open" || cmd == "workbench.action.chat.focusInput") {
-					hasBinding = true
-					break
-				}
-			}
-
-			if !hasBinding {
-				entries = append(entries, map[string]interface{}{
-					"key":     "ctrl+alt+i",
-					"command": "workbench.action.chat.open",
-				})
-				entries = append(entries, map[string]interface{}{
-					"key":     "ctrl+alt+i",
-					"command": "workbench.action.chat.focusInput",
-				})
-				out, err := json.MarshalIndent(entries, "", "  ")
-				if err == nil {
-					_ = os.WriteFile(target, out, 0644)
-				}
-			}
-		}
-	}
 	return nil
 }
 

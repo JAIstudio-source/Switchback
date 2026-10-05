@@ -32,6 +32,26 @@
   </header>
 
   <main class="mobile-container">
+    <!-- Productivity Mini-Bar -->
+    <div class="m-card m-stats-card" style="padding: 10px 14px; background: var(--pixel-darker); border: 2px solid #000;">
+      <div style="display:flex; justify-content:space-between; align-items:center; font-size:10px;">
+        <div>
+          <span style="color:#888; font-size:8px;">⏱️ TIME SAVED:</span>
+          <span class="highlight-emerald" id="m-time-saved" style="font-weight:bold; margin-left:4px;">0m 00s</span>
+        </div>
+        <div style="color:#444;">|</div>
+        <div>
+          <span style="color:#888; font-size:8px;">⚡ TASKS:</span>
+          <span class="highlight-gold" id="m-tasks-count" style="font-weight:bold; margin-left:4px;">0</span>
+        </div>
+        <div style="color:#444;">|</div>
+        <div>
+          <span style="color:#888; font-size:8px;">🛡️ APPR:</span>
+          <span class="highlight-cyan" id="m-approvals-count" style="font-weight:bold; margin-left:4px;">0</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Primary Focus Mode Banner -->
     <div class="m-card m-guard-card">
       <div class="guard-header">
@@ -71,6 +91,9 @@
       <h2 class="approval-title" id="m-approval-title">Action Approval Required</h2>
       <p class="approval-desc" id="m-approval-desc">The AI Agent is requesting permission to execute an action or tool call.</p>
       
+      <!-- Context Snippet Box -->
+      <div id="m-approval-snippet-box" class="approval-snippet-box" style="display:none; width:100%; margin:10px 0; background:#0a0b0d; border:2px solid var(--pixel-gold); padding:8px;"></div>
+
       <!-- Dynamic Options Container -->
       <div class="approval-options" id="m-approval-options">
         <button class="m-btn m-btn-approve" id="btn-approve">

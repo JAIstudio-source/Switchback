@@ -5,7 +5,7 @@
 class PixelAudio {
   constructor() {
     this.ctx = null;
-    this.enabled = true;
+    this.enabled = localStorage.getItem('switchback_sound_enabled') === 'true';
   }
 
   init() {
@@ -13,6 +13,12 @@ class PixelAudio {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AudioCtx();
     }
+  }
+
+  toggleSound() {
+    this.enabled = !this.enabled;
+    localStorage.setItem('switchback_sound_enabled', this.enabled ? 'true' : 'false');
+    return this.enabled;
   }
 
   playClick() {
@@ -74,6 +80,45 @@ class PixelAudio {
     osc.stop(this.ctx.currentTime + 0.08);
   }
 
+  playAlert() {
+    if (!this.enabled) return;
+    this.init();
+    const now = this.ctx.currentTime;
+    // Pleasant dual chime: 880Hz (A5) -> 1174Hz (D6)
+    const tones = [
+      { freq: 880, start: 0, dur: 0.1 },
+      { freq: 1174, start: 0.1, dur: 0.22 }
+    ];
+    tones.forEach(t => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(t.freq, now + t.start);
+      gain.gain.setValueAtTime(0.2, now + t.start);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(now + t.start);
+      osc.stop(now + t.start + t.dur);
+    });
+  }
+
+  playSubmit() {
+    if (!this.enabled) return;
+    this.init();
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(587, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, this.ctx.currentTime + 0.08);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.08);
+  }
+
   playFanfare() {
     if (!this.enabled) return;
     this.init();
@@ -110,6 +155,13 @@ const toggleFullscreenGuardEl = document.getElementById('toggle-fullscreen-guard
 const toggleMeetingGuardEl = document.getElementById('toggle-meeting-guard');
 const toggleMediaControlEl = document.getElementById('toggle-media-control');
 const toggleMobilePrimaryDesktopEl = document.getElementById('toggle-mobile-primary-desktop');
+const toggleAutoApproveEl = document.getElementById('toggle-auto-approve');
+const toggleKeepInTrayEl = document.getElementById('toggle-keep-in-tray');
+
+// Productivity HUD Elements
+const hudTimeSavedEl = document.getElementById('hud-time-saved');
+const hudTasksCountEl = document.getElementById('hud-tasks-count');
+const hudApprovalsCountEl = document.getElementById('hud-approvals-count');
 
 // Master Control
 const btnMasterStop = document.getElementById('btn-master-stop');
@@ -125,6 +177,18 @@ const countdownText = document.getElementById('countdown-text');
 let isCurrentlyStopped = false;
 let detectedAgentsList = [];
 let openAppsList = [];
+let lastKnownStatus = '';
+let lastPendingApprovalId = null;
+
+function formatDuration(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m > 0) {
+    return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+  }
+  return `${s}s`;
+}
 
 // Log helper
 function logChat(sender, message, type = 'info') {
@@ -188,15 +252,20 @@ async function fetchWindows() {
       selectAppsEl.appendChild(opt);
     });
 
-  } catch (e) {}
+  } catch (e) {
+    console.warn('fetchWindows error:', e);
+  }
 }
+
+let consecutiveStatusErrors = 0;
 
 // Fetch active status
 async function fetchStatus() {
   try {
     const res = await fetch('/api/status');
-    if (!res.ok) return;
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    consecutiveStatusErrors = 0;
 
     if (selectedAgentNameEl) {
       const title = data.selected_agent_title || 'Auto-Detect Active';
@@ -218,6 +287,30 @@ async function fetchStatus() {
     if (toggleMeetingGuardEl) toggleMeetingGuardEl.checked = !!data.meeting_guard;
     if (toggleMediaControlEl) toggleMediaControlEl.checked = !!data.media_control;
     if (toggleMobilePrimaryDesktopEl) toggleMobilePrimaryDesktopEl.checked = !!data.mobile_control_active;
+    if (toggleAutoApproveEl) toggleAutoApproveEl.checked = !!data.auto_approve_safe;
+    if (toggleKeepInTrayEl) toggleKeepInTrayEl.checked = !!data.keep_in_tray;
+
+    // HUD Stats
+    if (hudTimeSavedEl) hudTimeSavedEl.textContent = formatDuration(data.total_time_saved_secs);
+    if (hudTasksCountEl) hudTasksCountEl.textContent = data.total_tasks_completed || 0;
+    if (hudApprovalsCountEl) hudApprovalsCountEl.textContent = data.total_approvals_handled || 0;
+
+    // Audio chime only on true state completion if enabled
+    const currentApprovalId = data.pending_approval ? data.pending_approval.id : null;
+    if (currentApprovalId && currentApprovalId !== lastPendingApprovalId) {
+      lastPendingApprovalId = currentApprovalId;
+      if (audio.enabled) audio.playAlert();
+    } else if (!currentApprovalId) {
+      lastPendingApprovalId = null;
+    }
+
+    if (data.current_status && data.current_status !== lastKnownStatus) {
+      if (data.current_status === 'completed') {
+        if (audio.enabled) audio.playFanfare();
+      }
+      lastKnownStatus = data.current_status;
+    }
+
     isCurrentlyStopped = !!data.stopped;
 
     // Master Stop button UI state
@@ -229,6 +322,7 @@ async function fetchStatus() {
         btnMasterStop.classList.add('pixel-btn-resume');
       }
       if (statusBadgeEl) {
+        statusBadgeEl.style.background = '';
         statusBadgeEl.textContent = '⏸ PAUSED';
         statusBadgeEl.classList.add('badge-stopped');
       }
@@ -247,6 +341,9 @@ async function fetchStatus() {
         } else if (data.current_status === 'permission_needed') {
           statusBadgeEl.textContent = '🔔 PERMISSION NEEDED';
           statusBadgeEl.style.background = 'var(--pixel-gold)';
+        } else if (data.current_status === 'completed') {
+          statusBadgeEl.textContent = '✓ TASK COMPLETED';
+          statusBadgeEl.style.background = 'var(--pixel-emerald)';
         } else {
           statusBadgeEl.textContent = '● RUNNING';
           statusBadgeEl.style.background = 'var(--pixel-emerald)';
@@ -264,7 +361,7 @@ async function fetchStatus() {
     if (data.antigravity_installed || data.claude_installed) {
       if (hooksStatusBadge) {
         hooksStatusBadge.textContent = 'INSTALLED';
-        hooksStatusBadge.className = 'badge-red';
+        hooksStatusBadge.className = 'badge-green';
       }
     } else {
       if (hooksStatusBadge) {
@@ -297,7 +394,15 @@ async function fetchStatus() {
       }
     }
 
-  } catch (e) {}
+  } catch (e) {
+    consecutiveStatusErrors++;
+    if (consecutiveStatusErrors >= 4 && statusBadgeEl) {
+      statusBadgeEl.textContent = '⚡ SERVER DISCONNECTED';
+      statusBadgeEl.style.background = 'var(--pixel-red)';
+      statusBadgeEl.classList.add('badge-stopped');
+    }
+    console.warn('fetchStatus error:', e);
+  }
 }
 
 // Poll server logs
@@ -316,11 +421,16 @@ async function fetchLogs() {
         logChat('System', l, type);
       });
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn('fetchLogs error:', e);
+  }
 }
 
 // Pick Work Window by fast switching
 async function pickBySwitching() {
+  const btnPick = document.getElementById('btn-pick-by-switch');
+  if (btnPick) btnPick.disabled = true;
+
   audio.playClick();
   countdownBanner.classList.remove('hidden');
 
@@ -328,9 +438,7 @@ async function pickBySwitching() {
   countdownText.textContent = `SWITCH TO WINDOW IN ${seconds}...`;
   audio.playBeep(440);
 
-  // Send request to capture target window
-  const switchPromise = fetch('/api/pick-work-switch', { method: 'POST' }).then(r => r.json());
-
+  // Run the 3-second countdown visually so the user has time to focus their work window
   const timer = setInterval(() => {
     seconds--;
     if (seconds > 0) {
@@ -342,15 +450,27 @@ async function pickBySwitching() {
     }
   }, 1000);
 
-  const res = await switchPromise;
-  countdownBanner.classList.add('hidden');
+  // Wait 3.1 seconds for user to switch focus
+  await new Promise(resolve => setTimeout(resolve, 3100));
 
-  if (res.success) {
-    audio.playFanfare();
-    logChat('Target', `Locked in Work Window: ${res.title} (HWND: ${res.hwnd})`, 'success');
-    fetchStatus();
-  } else {
-    logChat('Target', res.message || 'Failed to capture window.', 'error');
+  try {
+    // Immediate capture of foreground window after countdown
+    const res = await fetch('/api/pick-work-capture', { method: 'POST' }).then(r => r.json());
+    countdownBanner.classList.add('hidden');
+
+    if (res.success) {
+      audio.playFanfare();
+      logChat('Target', `Locked in Work Window: ${res.title} (HWND: ${res.hwnd})`, 'success');
+      fetchStatus();
+    } else {
+      logChat('Target', res.message || 'Failed to capture window.', 'error');
+    }
+  } catch (e) {
+    countdownBanner.classList.add('hidden');
+    logChat('Target', `Failed to capture window: ${e.message}`, 'error');
+  } finally {
+    clearInterval(timer);
+    if (btnPick) btnPick.disabled = false;
   }
 }
 
@@ -374,14 +494,15 @@ async function updateModes() {
         fullscreen_guard: fullscreen,
         meeting_guard: meeting,
         media_control: media,
-        mobile_control_active: mobilePrimary,
-        stopped: isCurrentlyStopped
+        mobile_control_active: mobilePrimary
       })
     });
 
     logChat('Modes', `Updated (AutoSwitch: ${autoSwitch}, MediaPause: ${media}, MobileSuppress: ${mobilePrimary})`, 'info');
     fetchStatus();
-  } catch (e) {}
+  } catch (e) {
+    logChat('Modes', 'Failed to update modes: ' + e.message, 'error');
+  }
 }
 
 // Master Stop / Resume Toggle
@@ -398,7 +519,9 @@ async function toggleMasterStop() {
       logChat('Master', '▶ SWITCHBACK RESUMED. Auto-focusing is ACTIVE.', 'success');
     }
     fetchStatus();
-  } catch (e) {}
+  } catch (e) {
+    logChat('Master', 'Failed to toggle pause: ' + e.message, 'error');
+  }
 }
 
 // Quick Preset Filter Handlers
@@ -438,11 +561,24 @@ function setupEvents() {
   const soundStatus = document.getElementById('sound-status');
   const soundIcon = document.getElementById('sound-icon');
   if (soundBtn) {
+    if (soundStatus) soundStatus.textContent = audio.enabled ? 'ON' : 'OFF';
+    if (soundIcon) soundIcon.textContent = audio.enabled ? '🔊' : '🔇';
+
     soundBtn.addEventListener('click', () => {
-      audio.enabled = !audio.enabled;
-      soundStatus.textContent = audio.enabled ? 'ON' : 'OFF';
-      soundIcon.textContent = audio.enabled ? '🔊' : '🔇';
-      if (audio.enabled) audio.playClick();
+      const isEnabled = audio.toggleSound();
+      if (soundStatus) soundStatus.textContent = isEnabled ? 'ON' : 'OFF';
+      if (soundIcon) soundIcon.textContent = isEnabled ? '🔊' : '🔇';
+      if (isEnabled) audio.playClick();
+      logChat('Audio', isEnabled ? 'Sound chimes enabled.' : 'Sound chimes muted.', 'info');
+    });
+  }
+
+  // Preview Chime Button
+  const btnTestChime = document.getElementById('btn-test-chime');
+  if (btnTestChime) {
+    btnTestChime.addEventListener('click', () => {
+      audio.playAlert();
+      logChat('Audio', 'Previewing 8-bit permission chime!', 'info');
     });
   }
 
@@ -509,6 +645,36 @@ function setupEvents() {
   if (toggleMediaControlEl) toggleMediaControlEl.addEventListener('change', updateModes);
   if (toggleMobilePrimaryDesktopEl) toggleMobilePrimaryDesktopEl.addEventListener('change', updateModes);
 
+  // Safe Auto-Approve Toggle
+  if (toggleAutoApproveEl) {
+    toggleAutoApproveEl.addEventListener('change', async () => {
+      audio.playClick();
+      try {
+        const res = await fetch('/api/toggle-auto-approve', { method: 'POST' });
+        const data = await res.json();
+        logChat('SafeAuto', data.auto_approve_safe ? '🛡️ Auto-Approve Safe Actions ENABLED.' : 'Auto-Approve Safe Actions DISABLED.', 'info');
+        fetchStatus();
+      } catch (e) {
+        logChat('SafeAuto', 'Error updating auto-approve: ' + e.message, 'error');
+      }
+    });
+  }
+
+  // System Tray Toggle
+  if (toggleKeepInTrayEl) {
+    toggleKeepInTrayEl.addEventListener('change', async () => {
+      audio.playClick();
+      try {
+        const res = await fetch('/api/toggle-tray', { method: 'POST' });
+        const data = await res.json();
+        logChat('Tray', data.keep_in_tray ? '📥 Run in System Tray ENABLED. SwitchBack stays alive when tabs close.' : 'Run in System Tray DISABLED.', 'info');
+        fetchStatus();
+      } catch (e) {
+        logChat('Tray', 'Error updating tray setting: ' + e.message, 'error');
+      }
+    });
+  }
+
   // Test Buttons
   const btnTestStep1 = document.getElementById('btn-test-step1');
   if (btnTestStep1) {
@@ -519,7 +685,9 @@ function setupEvents() {
         const res = await fetch('/api/test-work', { method: 'POST' });
         const data = await res.json();
         logChat('Test', data.message, data.success ? 'success' : 'error');
-      } catch (e) {}
+      } catch (e) {
+        logChat('Test', 'Test Step 1 failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -532,7 +700,9 @@ function setupEvents() {
         const res = await fetch('/api/test-agent', { method: 'POST' });
         const data = await res.json();
         logChat('Test', data.message, data.success ? 'success' : 'error');
-      } catch (e) {}
+      } catch (e) {
+        logChat('Test', 'Test Step 2 failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -545,7 +715,9 @@ function setupEvents() {
         const res = await fetch('/api/test-focus', { method: 'POST' });
         const data = await res.json();
         logChat('Test', data.message, 'success');
-      } catch (e) {}
+      } catch (e) {
+        logChat('Test', 'Simulation failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -557,7 +729,9 @@ function setupEvents() {
         const res = await fetch('/api/toggle-media', { method: 'POST' });
         const data = await res.json();
         logChat('Media', data.message, 'success');
-      } catch (e) {}
+      } catch (e) {
+        logChat('Media', 'Media toggle failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -572,7 +746,9 @@ function setupEvents() {
         audio.playFanfare();
         logChat('Hook', data.message || 'Hooks installed successfully!', 'success');
         fetchStatus();
-      } catch (e) {}
+      } catch (e) {
+        logChat('Hook', 'Install failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -586,7 +762,9 @@ function setupEvents() {
         const data = await res.json();
         logChat('Hook', data.message || 'Hooks removed successfully!', 'warn');
         fetchStatus();
-      } catch (e) {}
+      } catch (e) {
+        logChat('Hook', 'Uninstall failed: ' + e.message, 'error');
+      }
     });
   }
 
@@ -695,12 +873,27 @@ function setupEvents() {
   }
 
   // Client Session Heartbeat & Auto-disconnect on window close
-  const clientId = 'tab_' + Math.random().toString(36).substr(2, 9);
+  const clientId = 'tab_' + Math.random().toString(36).substring(2, 11);
   function sendHeartbeat() {
     fetch('/api/heartbeat?client=' + clientId, { method: 'POST' }).catch(() => {});
   }
   sendHeartbeat();
-  setInterval(sendHeartbeat, 3000);
+
+  // Send heartbeat immediately whenever user refocuses tab
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      sendHeartbeat();
+    }
+  });
+
+  // Use a dedicated Web Worker timer so heartbeats aren't throttled when the tab is in background
+  try {
+    const workerBlob = new Blob([`setInterval(() => postMessage('tick'), 4000);`], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(workerBlob));
+    worker.onmessage = () => sendHeartbeat();
+  } catch (e) {
+    setInterval(sendHeartbeat, 4000);
+  }
 
   window.addEventListener('beforeunload', () => {
     if (navigator.sendBeacon) {
@@ -718,6 +911,7 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchStatus();
   fetchLogs();
 
-  setInterval(fetchStatus, 2000);
-  setInterval(fetchLogs, 3000);
+  setInterval(fetchStatus, 400);
+  setInterval(fetchLogs, 2000);
+  setInterval(fetchWindows, 8000);
 });

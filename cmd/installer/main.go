@@ -264,6 +264,9 @@ if ($UserPath -like "*$InstallDir*") {
 # Remove Registry
 Remove-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SwitchBack" -Recurse -Force
 
+# Remove Firewall Rule
+& netsh.exe advfirewall firewall delete rule name="SwitchBack Mobile Remote" 2>$null | Out-Null
+
 # Schedule folder cleanup
 Start-Process -FilePath "cmd.exe" -ArgumentList ("/c timeout /t 1 /nobreak >nul & rd /s /q """ + $InstallDir + """") -WindowStyle Hidden
 Write-Host "SwitchBack has been completely uninstalled." -ForegroundColor Green
@@ -334,6 +337,23 @@ Set-ItemProperty -Path $RegKey -Name "NoRepair" -Value 1 -Type DWord
 
 	// Flush Windows Shell Icon Cache via native Win32 DLL
 	refreshShellIcons()
+
+	// Configure Windows Firewall Inbound Rule for Mobile Remote
+	fwCmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+		"name=SwitchBack Mobile Remote", "dir=in", "action=allow", "protocol=TCP",
+		"localport=48123-48127", "profile=private,domain", fmt.Sprintf("program=%s", targetExe))
+	fwCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = fwCmd.Run()
+
+	// Verify targetExe was placed properly
+	if _, err := os.Stat(targetExe); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to install switchback.exe. Please ensure switchback.exe is present in the installer directory or internet is connected.",
+		})
+		return
+	}
 
 	// Configure Agent Hooks
 	hookCmd := exec.Command(targetExe, "install")

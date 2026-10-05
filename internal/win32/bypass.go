@@ -55,9 +55,8 @@ func SetForegroundWindowWithBypass(target HWND) error {
 		}
 	}()
 
-	// 3. Proactive Alt-key pulse satisfying Windows foreground lock timer
-	procKeybdEvent.Call(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY, 0)
-	procKeybdEvent.Call(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY|KEYEVENTF_KEYUP, 0)
+	// 3. Proactive Alt-key pulse satisfying Windows foreground lock timer via atomic SendInput
+	SendKey(VK_MENU)
 
 	// 4. Bring window to top and switch
 	procBringWindowToTop.Call(uintptr(target))

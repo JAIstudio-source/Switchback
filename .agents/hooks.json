@@ -1,1 +1,49 @@
-{}
+{
+  "switchback": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "D:\\Download\\Switchback\\switchback.exe hook --event PreInvocation --agent antigravity",
+        "timeout": 30
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:\\Download\\Switchback\\switchback.exe hook --event PreToolUse --agent antigravity",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:\\Download\\Switchback\\switchback.exe hook --event PostToolUse --agent antigravity",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "D:\\Download\\Switchback\\switchback.exe hook --event Stop --agent antigravity",
+        "timeout": 30
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "D:\\Download\\Switchback\\switchback.exe hook --event Stop --agent antigravity",
+        "timeout": 30
+      }
+    ]
+  }
+}

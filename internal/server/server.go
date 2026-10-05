@@ -25,10 +25,57 @@ import (
 )
 
 var (
-	clientMu      sync.Mutex
-	activeClients = make(map[string]time.Time)
-	hasHadClients = false
+	clientMu           sync.Mutex
+	activeClients      = make(map[string]time.Time)
+	hasHadClients      = false
+	shutdownSignalChan = make(chan struct{}, 1)
+	staleStatusMu      sync.Mutex
+	staleAgentCount    int
+	staleWorkCount     int
+	pickWorkMu         sync.Mutex
 )
+
+func TriggerShutdown() {
+	select {
+	case shutdownSignalChan <- struct{}{}:
+	default:
+	}
+}
+
+func isRequestAuthorized(r *http.Request) bool {
+	// Loopback / localhost is always authorized
+	host := r.RemoteAddr
+	if host == "" || strings.HasPrefix(host, "127.0.0.1:") || strings.HasPrefix(host, "[::1]:") || strings.HasPrefix(host, "localhost:") {
+		return true
+	}
+
+	store, err := state.Load()
+	if err != nil || store.SessionToken == "" {
+		return false
+	}
+
+	token := r.Header.Get("X-Switchback-Token")
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+
+	return token != "" && token == store.SessionToken
+}
+
+func isValidUUID(s string) bool {
+	if len(s) < 32 || len(s) > 40 {
+		return false
+	}
+	hyphens := 0
+	for _, c := range s {
+		if c == '-' {
+			hyphens++
+		} else if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return hyphens >= 3
+}
 
 func RegisterClientHeartbeat(id string) {
 	if id == "" {
@@ -50,8 +97,8 @@ func DeregisterClient(id string) {
 }
 
 func runClientActivityMonitor() {
-	// Give initial 15-second grace period for browser window to launch and register heartbeat
-	time.Sleep(15 * time.Second)
+	// Give initial 20-second grace period for browser window to launch and register heartbeat
+	time.Sleep(20 * time.Second)
 
 	emptyCount := 0
 	for {
@@ -59,9 +106,9 @@ func runClientActivityMonitor() {
 
 		clientMu.Lock()
 		now := time.Now()
-		// Evict stale clients (> 8 seconds without heartbeat)
+		// Evict stale clients (> 90 seconds without heartbeat, accounting for throttled background tabs)
 		for id, lastSeen := range activeClients {
-			if now.Sub(lastSeen) > 8*time.Second {
+			if now.Sub(lastSeen) > 90*time.Second {
 				delete(activeClients, id)
 			}
 		}
@@ -72,12 +119,18 @@ func runClientActivityMonitor() {
 
 		if shouldCheck {
 			if numClients == 0 {
+				store, _ := state.Load()
+				if store != nil && store.KeepInTray {
+					emptyCount = 0
+					continue
+				}
 				emptyCount++
-				// If 0 clients connected for 6 seconds (3 consecutive ticks of 2s)
-				if emptyCount >= 3 {
+				// If 0 clients connected for 30 seconds (15 consecutive ticks of 2s)
+				if emptyCount >= 15 {
 					logger.Info("[Server] All browser windows/tabs closed. Terminating SwitchBack background process.")
 					fmt.Println("\n[INFO] All browser windows closed. SwitchBack stopped.")
-					os.Exit(0)
+					TriggerShutdown()
+					return
 				}
 			} else {
 				emptyCount = 0
@@ -88,8 +141,6 @@ func runClientActivityMonitor() {
 
 // StartServer launches the HTTP server and opens the browser.
 func StartServer(port int, embeddedFS fs.FS) error {
-	_ = installer.EnsureIDEKeybindings()
-
 	// 1. Check if an existing switchback instance is already running
 	checkURL := fmt.Sprintf("http://127.0.0.1:%d/api/status", port)
 	client := &http.Client{Timeout: 400 * time.Millisecond}
@@ -134,6 +185,13 @@ func StartServer(port int, embeddedFS fs.FS) error {
 	fmt.Println(" Press Ctrl+C in this terminal window to stop.")
 	fmt.Println("=======================================================")
 
+	// Initialize Windows System Tray in background
+	win32.StartTray(actualPort, func() {
+		logger.Info("[Tray] User selected exit from system tray.")
+		TriggerShutdown()
+	})
+	defer win32.StopTray()
+
 	// Monitor client windows closing in background
 	go runClientActivityMonitor()
 
@@ -144,9 +202,13 @@ func StartServer(port int, embeddedFS fs.FS) error {
 	server := &http.Server{Handler: mux}
 
 	go func() {
-		<-sigChan
-		fmt.Println("\n[INFO] Termination signal received. Stopping SwitchBack...")
-		logger.Info("[Server] Termination signal received. Exiting.")
+		select {
+		case <-sigChan:
+			fmt.Println("\n[INFO] Termination signal received. Stopping SwitchBack...")
+			logger.Info("[Server] Termination signal received. Exiting.")
+		case <-shutdownSignalChan:
+			logger.Info("[Server] Browser activity monitor requested graceful shutdown.")
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
@@ -172,7 +234,10 @@ func SetupRoutes(embeddedFS fs.FS) *http.ServeMux {
 	mux.HandleFunc("/api/select-agent", handleSelectAgent)
 	mux.HandleFunc("/api/select-work", handleSelectWork)
 	mux.HandleFunc("/api/pick-work-switch", handlePickWorkSwitch)
+	mux.HandleFunc("/api/pick-work-capture", handlePickWorkCapture)
 	mux.HandleFunc("/api/toggle-mode", handleToggleMode)
+	mux.HandleFunc("/api/toggle-auto-approve", handleToggleAutoApprove)
+	mux.HandleFunc("/api/toggle-tray", handleToggleTray)
 	mux.HandleFunc("/api/toggle-stopped", handleToggleStopped)
 	mux.HandleFunc("/api/test-focus", handleTestFocus)
 	mux.HandleFunc("/api/test-work", handleTestWork)
@@ -254,39 +319,68 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	title := win32.GetWindowTitle(fg)
 	store, _ := state.Load()
 
-	if store.SelectedAgentHWND != 0 && !win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
-		store.SelectedAgentHWND = 0
-		store.SelectedAgentTitle = ""
-		_ = store.Save()
+	staleStatusMu.Lock()
+	if store.SelectedAgentHWND != 0 {
+		if !win32.IsWindowValid(win32.HWND(store.SelectedAgentHWND)) {
+			staleAgentCount++
+			if staleAgentCount >= 5 {
+				store.SelectedAgentHWND = 0
+				store.SelectedAgentTitle = ""
+				_ = store.Save()
+				staleAgentCount = 0
+			}
+		} else {
+			staleAgentCount = 0
+		}
+	} else {
+		staleAgentCount = 0
 	}
-	if store.SelectedWorkHWND != 0 && !win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
-		store.SelectedWorkHWND = 0
-		store.SelectedWorkTitle = ""
-		_ = store.Save()
+
+	if store.SelectedWorkHWND != 0 {
+		if !win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
+			staleWorkCount++
+			if staleWorkCount >= 5 {
+				store.SelectedWorkHWND = 0
+				store.SelectedWorkTitle = ""
+				_ = store.Save()
+				staleWorkCount = 0
+			}
+		} else {
+			staleWorkCount = 0
+		}
+	} else {
+		staleWorkCount = 0
 	}
+	staleStatusMu.Unlock()
 
 	cwd, _ := os.Getwd()
 	agInstalled, claudeInstalled := installer.CheckHooksInstalled(cwd)
 
 	resp := map[string]interface{}{
-		"current_hwnd":          fmt.Sprintf("%d", fg),
-		"current_title":         title,
-		"selected_agent_hwnd":   store.SelectedAgentHWND,
-		"selected_agent_title":  store.SelectedAgentTitle,
-		"selected_agent_type":   store.SelectedAgentType,
-		"selected_work_hwnd":    store.SelectedWorkHWND,
-		"selected_work_title":   store.SelectedWorkTitle,
-		"gaming_mode":           store.GamingMode,
-		"auto_switch_enabled":   store.AutoSwitchEnabled,
-		"fullscreen_guard":     store.FullscreenGuard,
-		"meeting_guard":        store.MeetingGuard,
-		"media_control":        store.MediaControl,
-		"mobile_control_active": store.MobileControlActive,
-		"stopped":              store.Stopped,
-		"current_status":        store.CurrentStatus,
-		"active_sessions":       len(store.Sessions),
-		"antigravity_installed": agInstalled,
-		"claude_installed":      claudeInstalled,
+		"current_hwnd":            fmt.Sprintf("%d", fg),
+		"current_title":           title,
+		"selected_agent_hwnd":     store.SelectedAgentHWND,
+		"selected_agent_title":    store.SelectedAgentTitle,
+		"selected_agent_type":     store.SelectedAgentType,
+		"selected_work_hwnd":      store.SelectedWorkHWND,
+		"selected_work_title":     store.SelectedWorkTitle,
+		"gaming_mode":             store.GamingMode,
+		"auto_switch_enabled":     store.AutoSwitchEnabled,
+		"fullscreen_guard":        store.FullscreenGuard,
+		"meeting_guard":           store.MeetingGuard,
+		"media_control":           store.MediaControl,
+		"mobile_control_active":   store.MobileControlActive,
+		"auto_approve_safe":       store.AutoApproveSafe,
+		"keep_in_tray":            store.KeepInTray,
+		"total_tasks_completed":   store.TotalTasksCompleted,
+		"total_approvals_handled": store.TotalApprovalsHandled,
+		"total_time_saved_secs":   store.TotalTimeSavedSecs,
+		"pending_approval":        store.PendingApproval,
+		"stopped":                 store.Stopped,
+		"current_status":          store.CurrentStatus,
+		"active_sessions":         len(store.Sessions),
+		"antigravity_installed":   agInstalled,
+		"claude_installed":        claudeInstalled,
 	}
 
 	writeJSON(w, resp)
@@ -294,6 +388,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func handleWindows(w http.ResponseWriter, r *http.Request) {
 	windowsList := win32.GetOpenWindows()
+	store, _ := state.Load()
 
 	agents := []win32.WindowInfo{}
 	workApps := []win32.WindowInfo{}
@@ -301,7 +396,9 @@ func handleWindows(w http.ResponseWriter, r *http.Request) {
 	for _, win := range windowsList {
 		if win.IsAgent {
 			agents = append(agents, win)
-		} else {
+		}
+		// Any window other than the current agent is an eligible work window
+		if win.HWND != store.SelectedAgentHWND {
 			workApps = append(workApps, win)
 		}
 	}
@@ -351,11 +448,51 @@ func handleSelectWork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"success": true})
 }
 
+func handlePickWorkCapture(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fg := win32.GetForegroundWindow()
+	title := win32.GetWindowTitle(fg)
+
+	if fg != 0 && win32.IsWindowValid(fg) {
+		_ = state.SetSelectedWork(uintptr(fg), title)
+		logger.Info("[Config] Captured Work Window via immediate capture: HWND %d (\"%s\")", fg, title)
+		writeJSON(w, map[string]interface{}{
+			"success": true,
+			"hwnd":    fg,
+			"title":   title,
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"success": false,
+		"message": "Failed to capture window. Please make sure the window is focused.",
+	})
+}
+
 func handlePickWorkSwitch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	if r.URL.Query().Get("immediate") == "true" {
+		handlePickWorkCapture(w, r)
+		return
+	}
+
+	if !pickWorkMu.TryLock() {
+		writeJSON(w, map[string]interface{}{
+			"success": false,
+			"message": "A window capture is already in progress. Please switch to your target window now.",
+		})
+		return
+	}
+	defer pickWorkMu.Unlock()
 
 	// Capture target window after 3.2 seconds countdown
 	time.Sleep(3200 * time.Millisecond)
@@ -393,6 +530,8 @@ func handleToggleMode(w http.ResponseWriter, r *http.Request) {
 		MeetingGuard        bool `json:"meeting_guard"`
 		MediaControl        bool `json:"media_control"`
 		MobileControlActive bool `json:"mobile_control_active"`
+		AutoApproveSafe     bool `json:"auto_approve_safe"`
+		KeepInTray          bool `json:"keep_in_tray"`
 		Stopped             bool `json:"stopped"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -401,9 +540,39 @@ func handleToggleMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = state.SetModes(req.GamingMode, req.AutoSwitchEnabled, req.FullscreenGuard, req.MeetingGuard, req.MediaControl, req.MobileControlActive, req.Stopped)
-	logger.Info("[Config] Updated modes - GamingMode: %v, AutoSwitch: %v, FullscreenGuard: %v, MeetingGuard: %v, MediaControl: %v, MobileControlActive: %v, Stopped: %v",
-		req.GamingMode, req.AutoSwitchEnabled, req.FullscreenGuard, req.MeetingGuard, req.MediaControl, req.MobileControlActive, req.Stopped)
+	_ = state.SetSafeAutoApprove(req.AutoApproveSafe)
+	_ = state.SetKeepInTray(req.KeepInTray)
+	logger.Info("[Config] Updated modes - GamingMode: %v, AutoSwitch: %v, FullscreenGuard: %v, MeetingGuard: %v, MediaControl: %v, MobileControlActive: %v, AutoApproveSafe: %v, KeepInTray: %v, Stopped: %v",
+		req.GamingMode, req.AutoSwitchEnabled, req.FullscreenGuard, req.MeetingGuard, req.MediaControl, req.MobileControlActive, req.AutoApproveSafe, req.KeepInTray, req.Stopped)
 	writeJSON(w, map[string]interface{}{"success": true})
+}
+
+func handleToggleAutoApprove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	val, err := state.ToggleAutoApproveSafe()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logger.Info("[Config] AutoApproveSafe toggled: %v", val)
+	writeJSON(w, map[string]interface{}{"success": true, "auto_approve_safe": val})
+}
+
+func handleToggleTray(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	val, err := state.ToggleKeepInTray()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logger.Info("[Config] KeepInTray toggled: %v", val)
+	writeJSON(w, map[string]interface{}{"success": true, "keep_in_tray": val})
 }
 
 func handleToggleStopped(w http.ResponseWriter, r *http.Request) {
@@ -510,7 +679,7 @@ func handleTestAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if store.MediaControl && store.SelectedWorkHWND != 0 {
+	if store.MediaControl && store.SelectedWorkHWND != 0 && win32.IsWindowValid(win32.HWND(store.SelectedWorkHWND)) {
 		win32.ToggleMediaPlayback(win32.HWND(store.SelectedWorkHWND))
 		logger.Info("[Test] Step 2: Auto-paused media playback before switching to Agent")
 	}
@@ -579,34 +748,18 @@ func handleUninstallHooks(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogs(w http.ResponseWriter, r *http.Request) {
-	localAppData := os.Getenv("LOCALAPPDATA")
-	logPath := filepath.Join(localAppData, "switchback", "switchback.log")
-
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		writeJSON(w, []string{"[INFO] Log file created."})
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	filtered := []string{}
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if l != "" {
-			filtered = append(filtered, l)
-		}
-	}
-
-	if len(filtered) > 25 {
-		filtered = filtered[len(filtered)-25:]
-	}
-
-	writeJSON(w, filtered)
+	lines := logger.GetRecentLogs(25)
+	writeJSON(w, lines)
 }
 
 // Mobile Control Handlers
 
 func handleMobileInfo(w http.ResponseWriter, r *http.Request) {
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	lanIP := GetPrimaryLANIP()
 	allIPs := GetLocalIPs()
 	store, _ := state.Load()
@@ -619,13 +772,14 @@ func handleMobileInfo(w http.ResponseWriter, r *http.Request) {
 		port = parts[1]
 	}
 
-	mobileURL := fmt.Sprintf("http://%s:%s/mobile.html", lanIP, port)
+	mobileURL := fmt.Sprintf("http://%s:%s/mobile.html?token=%s", lanIP, port, store.SessionToken)
 
 	writeJSON(w, map[string]interface{}{
 		"lan_ip":                lanIP,
 		"all_ips":               allIPs,
 		"port":                  port,
 		"mobile_url":            mobileURL,
+		"session_token":         store.SessionToken,
 		"mobile_control_active": store.MobileControlActive,
 		"current_status":        store.CurrentStatus,
 		"agent_title":           store.SelectedAgentTitle,
@@ -639,6 +793,12 @@ func handleMobileToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized: missing or invalid session token", http.StatusUnauthorized)
+		return
+	}
+
+	// Body can optionally specify {"active": bool}. If omitted/empty, it acts as a toggle.
 	var req struct {
 		Active *bool `json:"active"`
 	}
@@ -664,22 +824,32 @@ func handleMobileStatus(w http.ResponseWriter, r *http.Request) {
 	store, _ := state.Load()
 
 	writeJSON(w, map[string]interface{}{
-		"mobile_control_active": store.MobileControlActive,
-		"current_status":        store.CurrentStatus,
-		"agent_title":           store.SelectedAgentTitle,
-		"work_title":            store.SelectedWorkTitle,
-		"media_control":         store.MediaControl,
-		"media_paused":          store.MediaPaused,
-		"pending_approval":      store.PendingApproval,
-		"last_prompt":           store.LastMobilePrompt,
-		"gaming_mode":           store.GamingMode,
-		"fullscreen_guard":      store.FullscreenGuard,
+		"mobile_control_active":   store.MobileControlActive,
+		"current_status":          store.CurrentStatus,
+		"agent_title":             store.SelectedAgentTitle,
+		"work_title":              store.SelectedWorkTitle,
+		"media_control":           store.MediaControl,
+		"media_paused":            store.MediaPaused,
+		"pending_approval":        store.PendingApproval,
+		"auto_approve_safe":       store.AutoApproveSafe,
+		"keep_in_tray":            store.KeepInTray,
+		"total_tasks_completed":   store.TotalTasksCompleted,
+		"total_approvals_handled": store.TotalApprovalsHandled,
+		"total_time_saved_secs":   store.TotalTimeSavedSecs,
+		"last_prompt":             store.LastMobilePrompt,
+		"gaming_mode":             store.GamingMode,
+		"fullscreen_guard":        store.FullscreenGuard,
 	})
 }
 
 func handleMobileReply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized: missing or invalid session token", http.StatusUnauthorized)
 		return
 	}
 
@@ -694,25 +864,30 @@ func handleMobileReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	store, _ := state.Load()
+	isPending := store.PendingApproval != nil && (store.PendingApproval.ID == req.ID || req.ID == "" || req.ID == "test_clear")
+
 	_ = state.SetApprovalReply(req.ID, req.Decision, req.Answer, req.Index)
+	_ = state.RecordApprovalHandled()
 	logger.Info("[MobileControl] Approval replied from phone: ID=%s, Decision=%s, OptionIndex=%d, Answer=\"%s\"", req.ID, req.Decision, req.Index, req.Answer)
 
-	// Inject via Win32 keystrokes for terminal and IDE dialogs (Antigravity, Claude Code, Codex)
-	store, _ := state.Load()
-	targetHWND := win32.HWND(store.SelectedAgentHWND)
-	if targetHWND == 0 || !win32.IsWindowValid(targetHWND) {
-		found := win32.FindWindowByTitlePattern([]string{
-			"Antigravity", "Claude", "Cursor", "Visual Studio Code", "Code -", "Windsurf",
-		})
-		if found != 0 {
-			targetHWND = found
+	// Inject via Win32 keystrokes only if an approval prompt is active
+	if isPending {
+		targetHWND := win32.HWND(store.SelectedAgentHWND)
+		if targetHWND == 0 || !win32.IsWindowValid(targetHWND) {
+			found := win32.FindWindowByTitlePattern([]string{
+				"Antigravity", "Claude", "Cursor", "Visual Studio Code", "Code -", "Windsurf",
+			})
+			if found != 0 {
+				targetHWND = found
+			}
 		}
-	}
 
-	if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
-		go func(hwnd win32.HWND, dec, ans string, idx int, mobPrim bool) {
-			_ = win32.InjectApprovalToAgent(hwnd, dec, ans, idx, mobPrim)
-		}(targetHWND, req.Decision, req.Answer, req.Index, store.MobileControlActive)
+		if targetHWND != 0 && win32.IsWindowValid(targetHWND) {
+			go func(hwnd win32.HWND, dec, ans string, idx int, mobPrim bool) {
+				_ = win32.InjectApprovalToAgent(hwnd, dec, ans, idx, mobPrim)
+			}(targetHWND, req.Decision, req.Answer, req.Index, store.MobileControlActive)
+		}
 	}
 
 	writeJSON(w, map[string]interface{}{
@@ -724,6 +899,11 @@ func handleMobileReply(w http.ResponseWriter, r *http.Request) {
 func handleMobilePrompt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized: missing or invalid session token", http.StatusUnauthorized)
 		return
 	}
 
@@ -801,7 +981,9 @@ func resolveConversationID() string {
 						newestTime = info.ModTime()
 						id := strings.TrimSuffix(name, ".db-wal")
 						id = strings.TrimSuffix(id, ".db")
-						newestID = id
+						if isValidUUID(id) {
+							newestID = id
+						}
 					}
 				}
 			}
@@ -892,6 +1074,10 @@ func DispatchAgentPrompt(prompt string) error {
 
 func handleMobileOutput(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
+		if !isRequestAuthorized(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		var req struct {
 			Output string `json:"output"`
 		}
@@ -904,7 +1090,8 @@ func handleMobileOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	store, _ := state.Load()
-	output := strings.TrimSpace(store.LatestAgentOutput)
+	output, _ := state.GetLatestAgentOutput()
+	output = strings.TrimSpace(output)
 	if output == "" {
 		output = "Ready. The agent's latest response will appear here."
 	}
@@ -922,6 +1109,11 @@ func handleMobileMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	store, _ := state.Load()
 	targetHwnd := win32.HWND(store.SelectedWorkHWND)
 	win32.ToggleMediaPlayback(targetHwnd)
@@ -936,6 +1128,11 @@ func handleMobileMedia(w http.ResponseWriter, r *http.Request) {
 func handleMobileAsk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -978,6 +1175,11 @@ func handleMobileAsk(w http.ResponseWriter, r *http.Request) {
 func handleMobileExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !isRequestAuthorized(r) {
+		http.Error(w, "Unauthorized: missing or invalid session token", http.StatusUnauthorized)
 		return
 	}
 

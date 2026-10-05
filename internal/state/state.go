@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -20,12 +22,15 @@ type SessionState struct {
 }
 
 type PendingApprovalData struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Message   string    `json:"message"`
-	Type      string    `json:"type"` // "confirm", "question", "notification"
-	Options   []string  `json:"options,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Message        string    `json:"message"`
+	Type           string    `json:"type"` // "confirm", "question", "notification"
+	Options        []string  `json:"options,omitempty"`
+	ToolName       string    `json:"tool_name,omitempty"`
+	ContextSnippet string    `json:"context_snippet,omitempty"`
+	DangerLevel    string    `json:"danger_level,omitempty"` // "safe", "warning", "danger"
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type ApprovalResponse struct {
@@ -37,32 +42,48 @@ type ApprovalResponse struct {
 }
 
 type Store struct {
-	Version             int                  `json:"version"`
-	SelectedAgentHWND   uintptr              `json:"selected_agent_hwnd"`
-	SelectedAgentTitle  string               `json:"selected_agent_title"`
-	SelectedAgentType   string               `json:"selected_agent_type"`
-	SelectedWorkHWND    uintptr              `json:"selected_work_hwnd"`
-	SelectedWorkTitle   string               `json:"selected_work_title"`
-	GamingMode          bool                 `json:"gaming_mode"`           // Notification only for permission
-	AutoSwitchEnabled   bool                 `json:"auto_switch_enabled"`   // Auto switch when task sent / done
-	FullscreenGuard     bool                 `json:"fullscreen_guard"`      // Do not steal focus if watching fullscreen video or in game
-	MeetingGuard        bool                 `json:"meeting_guard"`         // Suppress focus stealing during Zoom/Teams/Discord calls
-	MediaControl        bool                 `json:"media_control"`         // Pause media on switch to agent, resume on prompt submit
-	MediaPaused         bool                 `json:"media_paused"`          // Tracks if media was paused by focusmgr
-	MobileControlActive bool                 `json:"mobile_control_active"` // When true, mobile is primary and PC focus switching is suppressed
-	PendingApproval     *PendingApprovalData `json:"pending_approval,omitempty"`
-	LastApprovalReply   *ApprovalResponse    `json:"last_approval_reply,omitempty"`
-	LastMobilePrompt    string               `json:"last_mobile_prompt,omitempty"`
-	LatestAgentOutput   string               `json:"latest_agent_output,omitempty"`
-	LastHookEvent       string               `json:"last_hook_event"` // For debouncing duplicate hook invocations
-	LastHookTime        time.Time            `json:"last_hook_time"`  // For debouncing duplicate hook invocations
-	Stopped             bool                 `json:"stopped"`         // Emergency stop / Pause focusmgr completely
-	CurrentStatus       string               `json:"current_status"`  // "idle", "running", "permission_needed", "completed"
-	ActiveConversationID string              `json:"active_conversation_id,omitempty"`
-	Sessions            map[string]SessionState `json:"sessions"`
+	Version               int                     `json:"version"`
+	SessionToken          string                  `json:"session_token,omitempty"`
+	SelectedAgentHWND     uintptr                 `json:"selected_agent_hwnd"`
+	SelectedAgentTitle    string                  `json:"selected_agent_title"`
+	SelectedAgentType     string                  `json:"selected_agent_type"`
+	SelectedWorkHWND      uintptr                 `json:"selected_work_hwnd"`
+	SelectedWorkTitle     string                  `json:"selected_work_title"`
+	GamingMode            bool                    `json:"gaming_mode"`             // Notification only for permission
+	AutoSwitchEnabled     bool                    `json:"auto_switch_enabled"`     // Auto switch when task sent / done
+	FullscreenGuard       bool                    `json:"fullscreen_guard"`        // Do not steal focus if watching fullscreen video or in game
+	MeetingGuard          bool                    `json:"meeting_guard"`           // Suppress focus stealing during Zoom/Teams/Discord calls
+	MediaControl          bool                    `json:"media_control"`           // Pause media on switch to agent, resume on prompt submit
+	MediaPaused           bool                    `json:"media_paused"`            // Tracks if media was paused by switchback
+	MobileControlActive   bool                    `json:"mobile_control_active"`   // When true, mobile is primary and PC focus switching is suppressed
+	AutoApproveSafe       bool                    `json:"auto_approve_safe"`       // Silently auto-approves safe read-only commands
+	KeepInTray            bool                    `json:"keep_in_tray"`            // Keep running in Windows system tray when browser closes
+	TotalTasksCompleted   int                     `json:"total_tasks_completed"`   // Number of tasks completed
+	TotalApprovalsHandled int                     `json:"total_approvals_handled"` // Number of approvals answered
+	TotalTimeSavedSecs    int64                   `json:"total_time_saved_secs"`    // Accumulated time saved (in seconds)
+	SessionStartTime      time.Time               `json:"session_start_time"`      // Session start timestamp
+	LastTaskStartTime     time.Time               `json:"last_task_start_time"`     // Last task execution start timestamp
+	PendingApproval       *PendingApprovalData    `json:"pending_approval,omitempty"`
+	LastApprovalReply     *ApprovalResponse       `json:"last_approval_reply,omitempty"`
+	LastMobilePrompt      string                  `json:"last_mobile_prompt,omitempty"`
+	LatestAgentOutput     string                  `json:"latest_agent_output,omitempty"`
+	LastHookEvent         string                  `json:"last_hook_event"` // For debouncing duplicate hook invocations
+	LastHookTime          time.Time               `json:"last_hook_time"`  // For debouncing duplicate hook invocations
+	Stopped               bool                    `json:"stopped"`         // Emergency stop / Pause switchback completely
+	CurrentStatus         string                  `json:"current_status"`  // "idle", "running", "permission_needed", "completed"
+	ActiveConversationID  string                  `json:"active_conversation_id,omitempty"`
+	Sessions              map[string]SessionState `json:"sessions"`
 }
 
 var mu sync.Mutex
+
+func generateToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("sb_%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
 
 // GetStateFilePath returns %LOCALAPPDATA%\switchback\state.json
 func GetStateFilePath() (string, error) {
@@ -91,11 +112,8 @@ func GetStateFilePath() (string, error) {
 	return targetPath, nil
 }
 
-// Load reads and parses the state file safely.
-func Load() (*Store, error) {
-	mu.Lock()
-	defer mu.Unlock()
-
+// loadLocked reads and parses the state file without acquiring mu.
+func loadLocked() (*Store, error) {
 	filePath, err := GetStateFilePath()
 	if err != nil {
 		return nil, err
@@ -116,33 +134,40 @@ func Load() (*Store, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			store.SessionToken = generateToken()
 			return store, nil
 		}
 		return nil, err
 	}
 
 	if len(data) == 0 {
+		store.SessionToken = generateToken()
 		return store, nil
 	}
 
 	if err := json.Unmarshal(data, store); err != nil {
+		store.SessionToken = generateToken()
 		return store, nil
 	}
 	if store.Sessions == nil {
 		store.Sessions = make(map[string]SessionState)
 	}
+	if store.SessionToken == "" {
+		store.SessionToken = generateToken()
+	}
 
 	return store, nil
 }
 
-// Save writes the store atomically via temporary file replacement.
-func (s *Store) Save() error {
-	mu.Lock()
-	defer mu.Unlock()
-
+// saveLocked writes the store atomically via temporary file replacement without acquiring mu.
+func saveLocked(s *Store) error {
 	filePath, err := GetStateFilePath()
 	if err != nil {
 		return err
+	}
+
+	if s.SessionToken == "" {
+		s.SessionToken = generateToken()
 	}
 
 	data, err := json.MarshalIndent(s, "", "  ")
@@ -155,44 +180,61 @@ func (s *Store) Save() error {
 		return fmt.Errorf("failed to write tmp state file: %w", err)
 	}
 
-	// Atomic replace
+	// Atomic replace: Do NOT delete filePath if rename fails (preserves existing valid state)
 	if err := os.Rename(tmpPath, filePath); err != nil {
-		_ = os.Remove(filePath)
-		if err := os.Rename(tmpPath, filePath); err != nil {
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("failed to commit state file: %w", err)
-		}
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to commit state file: %w", err)
 	}
 
 	return nil
 }
 
+// Load reads and parses the state file safely.
+func Load() (*Store, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadLocked()
+}
+
+// Save writes the store atomically via temporary file replacement.
+func (s *Store) Save() error {
+	mu.Lock()
+	defer mu.Unlock()
+	return saveLocked(s)
+}
+
 // SetSelectedAgent stores the active agent window.
 func SetSelectedAgent(hwnd uintptr, title, agentType string) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.SelectedAgentHWND = hwnd
 	store.SelectedAgentTitle = title
 	store.SelectedAgentType = agentType
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetSelectedWork stores the active user work/gaming window.
 func SetSelectedWork(hwnd uintptr, title string) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.SelectedWorkHWND = hwnd
 	store.SelectedWorkTitle = title
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetModes updates the gaming mode, autoswitch, fullscreen guard, meeting guard, media control, mobile control, and stopped state toggles.
 func SetModes(gamingMode, autoSwitch, fullscreenGuard, meetingGuard, mediaControl, mobileControlActive, stopped bool) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
@@ -203,58 +245,76 @@ func SetModes(gamingMode, autoSwitch, fullscreenGuard, meetingGuard, mediaContro
 	store.MediaControl = mediaControl
 	store.MobileControlActive = mobileControlActive
 	store.Stopped = stopped
-	return store.Save()
+	return saveLocked(store)
+}
+
+// SetSafeAutoApprove sets the auto-approval mode directly.
+func SetSafeAutoApprove(val bool) error {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	store.AutoApproveSafe = val
+	return saveLocked(store)
+}
+
+// SetKeepInTray sets the background tray persistence mode directly.
+func SetKeepInTray(val bool) error {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	store.KeepInTray = val
+	return saveLocked(store)
 }
 
 // ToggleStopped toggles the master stop/pause state.
 func ToggleStopped() (bool, error) {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return false, err
 	}
 	store.Stopped = !store.Stopped
-	err = store.Save()
+	err = saveLocked(store)
 	return store.Stopped, err
 }
 
-// SetStopped sets the master stop/pause state directly.
+// SetStopped sets the master stop/pause state directly without mutating mobile control state.
 func SetStopped(stopped bool) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.Stopped = stopped
-	if !stopped {
-		// When resuming/starting, ensure mobile suppression is disabled by default
-		store.MobileControlActive = false
-	}
-	return store.Save()
-}
-
-// SetStatus updates the active agent workflow status.
-func SetStatus(status string) error {
-	store, err := Load()
-	if err != nil {
-		return err
-	}
-	store.CurrentStatus = status
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SaveSession updates or creates a session entry.
 func SaveSession(sessionID string, s SessionState) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	s.UpdatedAt = time.Now()
 	store.Sessions[sessionID] = s
-	return store.Save()
+	return saveLocked(store)
 }
 
 // GetSession retrieves session state.
 func GetSession(sessionID string) (SessionState, bool, error) {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return SessionState{}, false, err
 	}
@@ -264,28 +324,35 @@ func GetSession(sessionID string) (SessionState, bool, error) {
 
 // SetMobileControl toggles whether mobile control is active (and PC focus switching suppressed).
 func SetMobileControl(active bool) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.MobileControlActive = active
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetPendingApproval stores a live approval/question event for mobile devices.
 func SetPendingApproval(data *PendingApprovalData) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.PendingApproval = data
+	store.LastApprovalReply = nil // Clear any stale reply
 	store.CurrentStatus = "permission_needed"
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetApprovalReply registers the user's mobile answer and clears the pending approval.
 func SetApprovalReply(id, decision, answer string, index int) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
@@ -300,12 +367,14 @@ func SetApprovalReply(id, decision, answer string, index int) error {
 	if store.CurrentStatus == "permission_needed" {
 		store.CurrentStatus = "running"
 	}
-	return store.Save()
+	return saveLocked(store)
 }
 
 // ClearPendingApproval removes any pending approval.
 func ClearPendingApproval() error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
@@ -313,43 +382,51 @@ func ClearPendingApproval() error {
 	if store.CurrentStatus == "permission_needed" {
 		store.CurrentStatus = "running"
 	}
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetLastMobilePrompt sets the most recent prompt submitted from mobile.
 func SetLastMobilePrompt(prompt string) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.LastMobilePrompt = prompt
 	store.CurrentStatus = "agent_working"
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetLatestAgentOutput stores output from the AI agent to display on mobile.
 func SetLatestAgentOutput(output string) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.LatestAgentOutput = output
-	return store.Save()
+	return saveLocked(store)
 }
 
 // SetCurrentStatus updates the overall status string.
 func SetCurrentStatus(status string) error {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.CurrentStatus = status
-	return store.Save()
+	return saveLocked(store)
 }
 
 // GetLatestAgentOutput retrieves the current agent output.
 func GetLatestAgentOutput() (string, error) {
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return "", err
 	}
@@ -362,11 +439,84 @@ func SetActiveConversationID(id string) error {
 	if clean == "" || clean == "default" {
 		return nil
 	}
-	store, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
 	if err != nil {
 		return err
 	}
 	store.ActiveConversationID = clean
-	return store.Save()
+	return saveLocked(store)
+}
+
+// ToggleAutoApproveSafe toggles silent approval of safe read-only commands.
+func ToggleAutoApproveSafe() (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return false, err
+	}
+	store.AutoApproveSafe = !store.AutoApproveSafe
+	return store.AutoApproveSafe, saveLocked(store)
+}
+
+// ToggleKeepInTray toggles whether switchback persists in system tray when browser closes.
+func ToggleKeepInTray() (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return false, err
+	}
+	store.KeepInTray = !store.KeepInTray
+	return store.KeepInTray, saveLocked(store)
+}
+
+// RecordTaskStart marks the start of an agent task execution.
+func RecordTaskStart() error {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	store.LastTaskStartTime = time.Now()
+	if store.SessionStartTime.IsZero() {
+		store.SessionStartTime = time.Now()
+	}
+	store.CurrentStatus = "agent_working"
+	return saveLocked(store)
+}
+
+// RecordTaskEnd records completion of an agent task and accumulates time saved.
+func RecordTaskEnd() error {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	store.TotalTasksCompleted++
+	if !store.LastTaskStartTime.IsZero() {
+		diff := time.Since(store.LastTaskStartTime)
+		if diff > 0 && diff < 3*time.Hour { // Avoid bogus large times on resume
+			store.TotalTimeSavedSecs += int64(diff.Seconds())
+		}
+	}
+	store.CurrentStatus = "completed"
+	return saveLocked(store)
+}
+
+// RecordApprovalHandled increments the count of approvals processed.
+func RecordApprovalHandled() error {
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := loadLocked()
+	if err != nil {
+		return err
+	}
+	store.TotalApprovalsHandled++
+	return saveLocked(store)
 }
 

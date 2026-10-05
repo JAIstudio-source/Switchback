@@ -34,6 +34,10 @@ func escapePS(s string) string {
 			res += "``"
 		} else if c == '$' {
 			res += "`$"
+		} else if c == '\n' {
+			res += "`n"
+		} else if c == '\r' {
+			res += "`r"
 		} else {
 			res += string(c)
 		}

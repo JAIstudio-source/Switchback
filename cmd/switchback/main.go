@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"switchback/internal/config"
 	"switchback/internal/installer"
 	"switchback/internal/logger"
 	"switchback/internal/notify"
@@ -53,7 +54,7 @@ func main() {
 	case "status":
 		handleStatus()
 	case "install":
-		handleInstall(args)
+		handleInstall()
 	case "uninstall", "remove-hooks", "unhook":
 		handleUninstall()
 	case "stop", "pause", "disable":
@@ -86,8 +87,10 @@ func main() {
 }
 
 func handleKillRunning() {
-	client := &http.Client{Timeout: 600 * time.Millisecond}
-	_, _ = client.Post("http://127.0.0.1:48123/api/shutdown", "application/json", nil)
+	client := &http.Client{Timeout: 400 * time.Millisecond}
+	for p := 48123; p <= 48127; p++ {
+		_, _ = client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/shutdown", p), "application/json", nil)
+	}
 	time.Sleep(300 * time.Millisecond)
 
 	currentPid := os.Getpid()
@@ -138,7 +141,17 @@ func handleHook(args []string) {
 	var rawStdinBytes []byte
 	stat, err := os.Stdin.Stat()
 	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		rawStdinBytes, _ = io.ReadAll(os.Stdin)
+		readDone := make(chan []byte, 1)
+		go func() {
+			b, _ := io.ReadAll(os.Stdin)
+			readDone <- b
+		}()
+		select {
+		case b := <-readDone:
+			rawStdinBytes = b
+		case <-time.After(150 * time.Millisecond):
+			// stdin didn't close promptly, continue without hanging
+		}
 	}
 
 	toolName, toolInput, responseText, parsedSession := parseHookStdin(rawStdinBytes)
@@ -151,6 +164,16 @@ func handleHook(args []string) {
 	store, err := state.Load()
 	if err != nil {
 		fmt.Println("{}")
+		os.Exit(0)
+	}
+
+	if store.Stopped {
+		logger.Info("[Hook] Master stop active. Ignoring event '%s'.", *event)
+		if *event == "Notification" || *event == "PreToolUse" {
+			fmt.Println(`{"decision":"allow"}`)
+		} else {
+			fmt.Println("{}")
+		}
 		os.Exit(0)
 	}
 
@@ -186,8 +209,13 @@ func handleHook(args []string) {
 			return win32.HWND(store.SelectedAgentHWND)
 		}
 
-		// 3. Fallback: Search visible windows for known agent patterns
-		found := win32.FindWindowByTitlePattern([]string{"Antigravity", "Claude", "Visual Studio Code", "Cursor", "Windsurf", "Codex", "Terminal"})
+		// 3. Fallback: Search visible windows for known agent patterns (including user-configured patterns)
+		patterns := []string{"Antigravity", "Claude", "Visual Studio Code", "Cursor", "Windsurf", "Codex", "Terminal"}
+		cfg := config.LoadConfig()
+		if agentCfg, ok := cfg.Agents[*agentType]; ok && len(agentCfg.TitlePatterns) > 0 {
+			patterns = append(agentCfg.TitlePatterns, patterns...)
+		}
+		found := win32.FindWindowByTitlePattern(patterns)
 		if found != 0 && win32.IsWindowValid(found) {
 			_ = state.SetSelectedAgent(uintptr(found), win32.GetWindowTitle(found), *agentType)
 			return found
@@ -227,7 +255,7 @@ func handleHook(args []string) {
 			}
 		}
 
-		// Fallback to open windows (ignoring popups and hidden helper windows)
+		// Fallback to open windows (prioritizing non-agent apps, but accepting any window other than agent)
 		if workHWND == 0 || !win32.IsWindowValid(workHWND) || workHWND == agentHWND {
 			openWindows := win32.GetOpenWindows()
 			for _, win := range openWindows {
@@ -237,6 +265,15 @@ func handleHook(args []string) {
 					break
 				}
 			}
+			if workHWND == 0 || !win32.IsWindowValid(workHWND) || workHWND == agentHWND {
+				for _, win := range openWindows {
+					if win.HWND != uintptr(agentHWND) && win.Title != "PopupHost" && len(win.Title) >= 3 && win32.IsWindowVisible(win32.HWND(win.HWND)) {
+						workHWND = win32.HWND(win.HWND)
+						_ = state.SetSelectedWork(win.HWND, win.Title)
+						break
+					}
+				}
+			}
 		}
 
 		return workHWND
@@ -244,6 +281,9 @@ func handleHook(args []string) {
 
 	switch *event {
 	case "UserPromptSubmit", "PreInvocation":
+		// Record stats for task start
+		_ = state.RecordTaskStart()
+
 		// 1. User submitted task in agent -> Switch focus to the user's Work Window!
 		agentHWND := resolveAgentHWND()
 		workHWND := resolveWorkHWND(agentHWND)
@@ -261,9 +301,9 @@ func handleHook(args []string) {
 			os.Exit(0)
 		}
 
-		// Only trigger the focus switch and media resume when transitioning from non-working status
-		// to avoid repetitive focus stealing during multi-tool execution in Antigravity
-		isInitialStart := (store.CurrentStatus != "agent_working")
+		currentFG := win32.GetForegroundWindow()
+		isUserAtAgent := (currentFG != 0 && (currentFG == agentHWND || agentHWND == 0))
+		isInitialStart := (store.CurrentStatus != "agent_working") || isUserAtAgent
 
 		if isInitialStart && workHWND != 0 && workHWND != agentHWND && win32.IsWindowValid(workHWND) {
 			logger.Info("[AutoSwitch] Task submitted (%s). Auto-switching to work window: HWND %d (%s)",
@@ -284,7 +324,21 @@ func handleHook(args []string) {
 		fmt.Println("{}")
 		os.Exit(0)
 
-	case "Stop":
+	case "PostToolUse":
+		logger.Info("[Hook] PostToolUse event. Clearing pending approval and resetting working state.")
+		store.PendingApproval = nil
+		if store.CurrentStatus == "permission_needed" {
+			store.CurrentStatus = "agent_working"
+		}
+		_ = store.Save()
+		fmt.Println("{}")
+		os.Exit(0)
+
+	case "Stop", "PostInvocation":
+		// Record stats for task completion & time saved
+		_ = state.RecordTaskEnd()
+		win32.UpdateTrayStatus("Idle (Task Completed)")
+
 		// Capture clean agent response into latest output for mobile controller
 		respText := strings.TrimSpace(responseText)
 		if respText != "" {
@@ -364,9 +418,29 @@ func handleHook(args []string) {
 		}
 		store.CurrentStatus = "completed"
 		_ = store.Save()
+		fmt.Println("{}")
+		os.Exit(0)
 
-	case "Notification", "PreToolUse":
-		// Agent explicitly requires user permission or attention (e.g. ask_question or user confirmation)
+	case "PreToolUse":
+		// Normal agent tool execution: update status, clear pending approval, and always allow
+		if store.CurrentStatus != "agent_working" {
+			store.CurrentStatus = "agent_working"
+		}
+		if store.PendingApproval != nil {
+			store.PendingApproval = nil
+		}
+		_ = store.Save()
+		fmt.Println(`{"decision":"allow"}`)
+		os.Exit(0)
+
+	case "Notification":
+		// Agent explicitly asks a question or requires user input
+		isQuestionTool := toolName == "ask_question" || toolName == "ask_user" || toolName == "ask"
+		if !isQuestionTool {
+			fmt.Println("{}")
+			os.Exit(0)
+		}
+
 		agentHWND := resolveAgentHWND()
 		currentFG := win32.GetForegroundWindow()
 		workHWND := resolveWorkHWND(agentHWND)
@@ -384,30 +458,47 @@ func handleHook(args []string) {
 			})
 		}
 
-		// Parse actual question, message, or tool permission requested
-		questionTitle, questionMsg, options := parseApprovalData(toolName, toolInput, responseText)
+		// Check for Smart Auto-Approve of safe actions
+		if store.AutoApproveSafe && isSafeAction(toolName, toolInput) {
+			logger.Info("[AutoApprove] Safe action '%s' auto-approved.", toolName)
+			_ = state.RecordApprovalHandled()
+			fmt.Println(`{"decision":"deny","reason":"Auto-approved safe action: Proceed"}`)
+			os.Exit(0)
+		}
 
+		win32.UpdateTrayStatus("Waiting for User Response")
+
+		// Parse question data
+		questionTitle, questionMsg, options, toolCleanName, snippet, dangerLevel := parseApprovalData(toolName, toolInput, responseText)
 		reqID := fmt.Sprintf("req_%d", time.Now().UnixNano())
 		store.PendingApproval = &state.PendingApprovalData{
-			ID:        reqID,
-			Title:     questionTitle,
-			Message:   questionMsg,
-			Type:      "confirm",
-			Options:   options,
-			CreatedAt: time.Now(),
+			ID:             reqID,
+			Title:          questionTitle,
+			Message:        questionMsg,
+			Type:           "confirm",
+			Options:        options,
+			ToolName:       toolCleanName,
+			ContextSnippet: snippet,
+			DangerLevel:    dangerLevel,
+			CreatedAt:      time.Now(),
 		}
 		store.CurrentStatus = "permission_needed"
 		_ = store.Save()
 
-		// If Mobile Control is active OR tool is ask_question:
-		// Wait up to 30s for the mobile phone to submit an answer directly!
-		if store.MobileControlActive || toolName == "ask_question" {
+		// If Mobile Control is active, wait up to 30s for phone response
+		if store.MobileControlActive {
 			logger.Info("[MobileControl] Waiting for mobile approval response (Request ID: %s)...", reqID)
-			for i := 0; i < 60; i++ { // 60 * 500ms = 30 seconds
-				time.Sleep(500 * time.Millisecond)
+			startTime := time.Now()
+			pollInterval := 100 * time.Millisecond
+			for time.Since(startTime) < 30*time.Second {
+				time.Sleep(pollInterval)
+				if pollInterval < 500*time.Millisecond {
+					pollInterval += 50 * time.Millisecond
+				}
 				s, err := state.Load()
 				if err == nil && s.LastApprovalReply != nil && s.LastApprovalReply.ID == reqID {
 					reply := s.LastApprovalReply
+					_ = state.RecordApprovalHandled()
 					if reply.Decision == "allow" {
 						fmt.Printf("{\"decision\":\"allow\"}\n")
 					} else if reply.Decision == "deny" {
@@ -422,33 +513,25 @@ func handleHook(args []string) {
 			}
 		}
 
-		// Fallback for desktop mode if no mobile answer arrived within timeout:
+		// Fallbacks for Gaming, Fullscreen, and Meeting modes
 		if store.GamingMode {
-			logger.Info("[GamingMode] Agent requires permission. Sent notification toast.")
 			notify.SendToast("switchback // AI Agent Alert", fmt.Sprintf("Agent asks: %s", questionTitle))
-			fmt.Println(`{"decision":"allow"}`)
+			fmt.Println("{}")
 			os.Exit(0)
 		}
-
-		// Fullscreen Guard: Do not steal focus if user is watching fullscreen video or in a game
 		if store.FullscreenGuard && win32.IsFullscreenActive() {
-			logger.Info("[FullscreenGuard] Fullscreen mode detected! Sent permission toast alert.")
 			notify.SendToast("switchback // AI Agent Alert", fmt.Sprintf("Agent asks: %s (Fullscreen detected)", questionTitle))
-			fmt.Println(`{"decision":"allow"}`)
+			fmt.Println("{}")
 			os.Exit(0)
 		}
-
-		// Meeting Guard: Do not steal focus if user is in an active call/meeting
 		if store.MeetingGuard && win32.IsMeetingActive() {
-			logger.Info("[MeetingGuard] Meeting/Voice Call detected! Sent permission toast alert.")
 			notify.SendToast("switchback // AI Agent Alert", fmt.Sprintf("Agent asks: %s (Meeting in progress)", questionTitle))
-			fmt.Println(`{"decision":"allow"}`)
+			fmt.Println("{}")
 			os.Exit(0)
 		}
 
-		// If media control is enabled, pause media before switching to agent
 		if store.MediaControl {
-			logger.Info("[Media] Pausing media playback upon agent notification/permission prompt")
+			logger.Info("[Media] Pausing media playback upon agent question prompt")
 			win32.ToggleMediaPlayback(workHWND)
 			time.Sleep(120 * time.Millisecond)
 			store.MediaPaused = true
@@ -456,11 +539,12 @@ func handleHook(args []string) {
 		}
 
 		if agentHWND != 0 && win32.IsWindowValid(agentHWND) {
-			logger.Info("[Notification] Agent requires attention/permission. Auto-switching to agent window: HWND %d (%s)",
+			logger.Info("[Notification] Agent requires user input. Auto-switching to agent window: HWND %d (%s)",
 				agentHWND, win32.GetWindowTitle(agentHWND))
 			_ = win32.SetForegroundWindowWithBypass(agentHWND)
 		}
-		fmt.Println(`{"decision":"allow"}`)
+
+		fmt.Println("{}")
 		os.Exit(0)
 	}
 
@@ -498,7 +582,7 @@ func handleStatus() {
 	fmt.Printf("State File: %s\n", statePath)
 }
 
-func handleInstall(args []string) {
+func handleInstall() {
 	exePath, err := os.Executable()
 	if err != nil {
 		fmt.Printf("Failed to get executable path: %v\n", err)
@@ -545,12 +629,18 @@ func handleUninstall() {
 }
 
 func handleStop() {
-	_ = state.SetStopped(true)
+	if err := state.SetStopped(true); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to persist state: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("[+] switchback is now PAUSED / STOPPED. All auto-switching is disabled.")
 }
 
 func handleResume() {
-	_ = state.SetStopped(false)
+	if err := state.SetStopped(false); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to persist state: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("[+] switchback is now RESUMED / ACTIVE. Auto-switching is enabled.")
 }
 
@@ -584,6 +674,14 @@ func handleTestFocus() {
 				if !win.IsAgent && win.HWND != uintptr(agentHWND) {
 					workHWND = win32.HWND(win.HWND)
 					break
+				}
+			}
+			if workHWND == 0 || !win32.IsWindowValid(workHWND) {
+				for _, win := range win32.GetOpenWindows() {
+					if win.HWND != uintptr(agentHWND) {
+						workHWND = win32.HWND(win.HWND)
+						break
+					}
 				}
 			}
 		}
@@ -621,7 +719,7 @@ func handleTestFocus() {
 
 	if store.GamingMode {
 		fmt.Println("4. Gaming Mode is ON: Triggering Toast Notification (No focus steal)...")
-		notify.SendToast("focusmgr // AI Agent Alert", "AI Agent finished its task!")
+		notify.SendToast("switchback // AI Agent Alert", "AI Agent finished its task!")
 	} else if agentHWND != 0 && win32.IsWindowValid(agentHWND) {
 		fmt.Printf("4. Auto-switching back to Agent window (HWND %d: \"%s\")...\n", agentHWND, win32.GetWindowTitle(agentHWND))
 		_ = win32.SetForegroundWindowWithBypass(agentHWND)
@@ -747,12 +845,15 @@ func parseHookStdin(rawBytes []byte) (toolName string, toolInput map[string]inte
 		return nil
 	}
 
-	for _, key := range []string{"tool_input", "toolInput", "input", "args", "arguments", "argumentsJson", "parameters"} {
+	inputKeys := []string{"tool_input", "toolInput", "input", "args", "arguments", "argumentsJson", "parameters"}
+	for _, key := range inputKeys {
 		if m := extractMap(root[key]); m != nil {
 			toolInput = m
 			break
 		}
-		if toolObj != nil {
+	}
+	if toolInput == nil && toolObj != nil {
+		for _, key := range inputKeys {
 			if m := extractMap(toolObj[key]); m != nil {
 				toolInput = m
 				break
@@ -773,16 +874,74 @@ func parseHookStdin(rawBytes []byte) (toolName string, toolInput map[string]inte
 	return toolName, toolInput, responseText, conversationID
 }
 
-func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg string) (string, string, []string) {
+// isSafeAction determines if a tool execution is safe for silent auto-approval.
+func isSafeAction(toolName string, toolInput map[string]interface{}) bool {
+	if toolName == "read_file" || toolName == "view_file" || toolName == "list_dir" || toolName == "grep_search" || toolName == "read_url_content" {
+		return true
+	}
+	if toolName == "ask_question" || toolName == "ask_user" || toolName == "ask" {
+		qText := ""
+		if toolInput != nil {
+			if qRaw, ok := toolInput["questions"]; ok {
+				if qList, ok := qRaw.([]interface{}); ok && len(qList) > 0 {
+					if qMap, ok := qList[0].(map[string]interface{}); ok {
+						if qStr, ok := qMap["question"].(string); ok {
+							qText = qStr
+						}
+					}
+				}
+			}
+			if qText == "" {
+				if qStr, ok := toolInput["question"].(string); ok {
+					qText = qStr
+				}
+			}
+		}
+		cleanQ := strings.ToLower(qText)
+		dangerTokens := []string{"rm ", "rmdir", "del ", "delete", "destroy", "drop", "truncate", "erase", "remove", "overwrite", "kill", "format"}
+		for _, token := range dangerTokens {
+			if strings.Contains(cleanQ, token) {
+				return false
+			}
+		}
+		return true
+	}
+	if toolName == "run_command" && toolInput != nil {
+		if cmd, ok := toolInput["CommandLine"].(string); ok {
+			cleanCmd := strings.TrimSpace(strings.ToLower(cmd))
+			// Reject any dangerous or mutating commands
+			dangerTokens := []string{"rm ", "rmdir", "del ", "delete", "erase", "push", "drop", "truncate", "format", "chmod", "chown", ">", ">>", "kill", "taskkill", "shutdown", "reboot"}
+			for _, token := range dangerTokens {
+				if strings.Contains(cleanCmd, token) {
+					return false
+				}
+			}
+			// Allow safe read-only queries
+			safePrefixes := []string{"git status", "git diff", "git log", "git branch", "git show", "git tag", "ls", "dir", "cat ", "echo ", "pwd", "type ", "whoami", "hostname", "cargo check", "go test", "npm test"}
+			for _, prefix := range safePrefixes {
+				if strings.HasPrefix(cleanCmd, prefix) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg string) (string, string, []string, string, string, string) {
 	title := "Agent Action Approval"
 	message := "The AI Agent requires permission for an action."
 	options := []string{"Allow Action", "Deny Action"}
+	toolClean := toolName
+	snippet := ""
+	dangerLevel := "medium"
 
 	if toolInput == nil {
 		if rawMsg != "" {
 			message = rawMsg
+			snippet = rawMsg
 		}
-		return title, message, options
+		return title, message, options, toolClean, snippet, dangerLevel
 	}
 
 	isAskQuestion := (toolName == "ask_question" || toolName == "ask_user" || toolName == "ask")
@@ -796,6 +955,8 @@ func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg
 
 	if isAskQuestion {
 		title = "AI Agent Question"
+		toolClean = "ask_question"
+		dangerLevel = "medium"
 
 		// 1. Check questions array
 		if qRaw, ok := toolInput["questions"]; ok {
@@ -812,6 +973,7 @@ func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg
 				if qMap, ok := qList[0].(map[string]interface{}); ok {
 					if qText, ok := qMap["question"].(string); ok && qText != "" {
 						message = qText
+						snippet = qText
 					}
 					if optRaw, ok := qMap["options"]; ok {
 						options = extractOptions(optRaw)
@@ -823,6 +985,7 @@ func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg
 		// 2. Direct question field
 		if qText, ok := toolInput["question"].(string); ok && qText != "" {
 			message = qText
+			snippet = qText
 		}
 		if optRaw, ok := toolInput["options"]; ok {
 			if opts := extractOptions(optRaw); len(opts) > 0 {
@@ -833,7 +996,7 @@ func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg
 		if len(options) == 0 {
 			options = []string{"Yes, proceed with action", "No, cancel"}
 		}
-		return title, message, options
+		return title, message, options, toolClean, snippet, dangerLevel
 	}
 
 	// Tool execution approval
@@ -841,20 +1004,38 @@ func parseApprovalData(toolName string, toolInput map[string]interface{}, rawMsg
 		title = fmt.Sprintf("Tool: %s", toolName)
 		if cmd, ok := toolInput["CommandLine"].(string); ok && cmd != "" {
 			message = fmt.Sprintf("Execute command:\n%s", cmd)
+			snippet = cmd
+			lower := strings.ToLower(cmd)
+			if strings.Contains(lower, "rm ") || strings.Contains(lower, "del ") || strings.Contains(lower, "push") || strings.Contains(lower, "drop") {
+				dangerLevel = "danger"
+			} else if strings.HasPrefix(lower, "git status") || strings.HasPrefix(lower, "ls") || strings.HasPrefix(lower, "dir") {
+				dangerLevel = "safe"
+			} else {
+				dangerLevel = "warning"
+			}
 		} else if target, ok := toolInput["TargetFile"].(string); ok && target != "" {
 			message = fmt.Sprintf("Modify file:\n%s", target)
+			snippet = target
+			dangerLevel = "warning"
 		} else if url, ok := toolInput["Url"].(string); ok && url != "" {
 			message = fmt.Sprintf("Open URL:\n%s", url)
+			snippet = url
+			dangerLevel = "medium"
 		} else if path, ok := toolInput["AbsolutePath"].(string); ok && path != "" {
 			message = fmt.Sprintf("Access file:\n%s", path)
+			snippet = path
+			dangerLevel = "safe"
 		} else {
 			message = fmt.Sprintf("Agent requested to execute tool '%s'", toolName)
+			snippet = toolName
+			dangerLevel = "medium"
 		}
 	} else if rawMsg != "" {
 		message = rawMsg
+		snippet = rawMsg
 	}
 
-	return title, message, options
+	return title, message, options, toolClean, snippet, dangerLevel
 }
 
 func extractOptions(optRaw interface{}) []string {
